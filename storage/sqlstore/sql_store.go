@@ -101,7 +101,9 @@ func (s *Store) init() error {
 		claim_time TIMESTAMP,
 		completed_time TIMESTAMP,
 		multi_instance_loop TEXT NOT NULL DEFAULT '',
-		loop_counter INTEGER NOT NULL DEFAULT 0
+		loop_counter INTEGER NOT NULL DEFAULT 0,
+			expire_time TIMESTAMP,
+			term_mode INTEGER NOT NULL DEFAULT 0
 	);
 
 	CREATE TABLE IF NOT EXISTS tokens (
@@ -305,8 +307,8 @@ func (s *Store) ListProcessInstances(ctx context.Context, defID string) ([]*inst
 
 func (s *Store) CreateActivityInstance(ctx context.Context, ai *instance.ActivityInstance) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO activity_instances (id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, multi_instance_loop, loop_counter) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ai.ID, ai.ProcessInstanceID, ai.ActivityID, string(ai.ActivityType), ai.Assignee, ai.AdhocParentID, string(ai.State), ai.MultiInstanceLoopID, ai.LoopCounter)
+		`INSERT INTO activity_instances (id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, multi_instance_loop, loop_counter, expire_time, term_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ai.ID, ai.ProcessInstanceID, ai.ActivityID, string(ai.ActivityType), ai.Assignee, ai.AdhocParentID, string(ai.State), ai.MultiInstanceLoopID, ai.LoopCounter, ai.ExpireTime, ai.TermMode)
 	if err != nil {
 		return fmt.Errorf("sqlstore: create activity instance %q: %w", ai.ID, err)
 	}
@@ -315,8 +317,8 @@ func (s *Store) CreateActivityInstance(ctx context.Context, ai *instance.Activit
 
 func (s *Store) UpdateActivityInstance(ctx context.Context, ai *instance.ActivityInstance) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE activity_instances SET state = ?, assignee = ?, claim_time = ?, completed_time = ?, multi_instance_loop = ?, loop_counter = ? WHERE id = ?`,
-		string(ai.State), ai.Assignee, ai.ClaimTime, ai.CompletedTime, ai.MultiInstanceLoopID, ai.LoopCounter, ai.ID)
+		`UPDATE activity_instances SET state = ?, assignee = ?, claim_time = ?, completed_time = ?, multi_instance_loop = ?, loop_counter = ?, expire_time = ?, term_mode = ? WHERE id = ?`,
+		string(ai.State), ai.Assignee, ai.ClaimTime, ai.CompletedTime, ai.MultiInstanceLoopID, ai.LoopCounter, ai.ExpireTime, ai.TermMode, ai.ID)
 	if err != nil {
 		return err
 	}
@@ -335,10 +337,12 @@ func (s *Store) GetActivityInstance(ctx context.Context, id string) (*instance.A
 		loopCounter                                 int
 		assigneeVal                                 string
 		adhocParentID                             string
+		expireTime                                  *time.Time
+		termMode                                    int
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE id = ?`, id).
-		Scan(&id, &piID, &activityID, &activityTypeStr, &assigneeVal, &adhocParentID, &stateStr, &claimTime, &completedTime, &loopID, &loopCounter)
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode FROM activity_instances WHERE id = ?`, id).
+		Scan(&id, &piID, &activityID, &activityTypeStr, &assigneeVal, &adhocParentID, &stateStr, &claimTime, &completedTime, &loopID, &loopCounter, &expireTime, &termMode)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("sqlstore: activity instance %q not found: %w", id, storage.ErrNotFound)
 	}
@@ -362,7 +366,7 @@ func (s *Store) GetActivityInstance(ctx context.Context, id string) (*instance.A
 
 func (s *Store) ListActiveActivities(ctx context.Context, processInstanceID string) ([]*instance.ActivityInstance, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE process_instance_id = ? AND state = 'active'`,
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode FROM activity_instances WHERE process_instance_id = ? AND state = 'active'`,
 		processInstanceID)
 	if err != nil {
 		return nil, err
@@ -373,7 +377,7 @@ func (s *Store) ListActiveActivities(ctx context.Context, processInstanceID stri
 
 func (s *Store) ListActivitiesByProcessInstance(ctx context.Context, processInstanceID string) ([]*instance.ActivityInstance, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE process_instance_id = ?`,
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode FROM activity_instances WHERE process_instance_id = ?`,
 		processInstanceID)
 	if err != nil {
 		return nil, err
@@ -384,7 +388,7 @@ func (s *Store) ListActivitiesByProcessInstance(ctx context.Context, processInst
 
 func (s *Store) ListActivitiesByLoopID(ctx context.Context, processInstanceID, loopID string) ([]*instance.ActivityInstance, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE process_instance_id = ? AND multi_instance_loop = ?`,
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode FROM activity_instances WHERE process_instance_id = ? AND multi_instance_loop = ?`,
 		processInstanceID, loopID)
 	if err != nil {
 		return nil, err
@@ -655,8 +659,10 @@ func scanActivityInstances(rows *sql.Rows) ([]*instance.ActivityInstance, error)
 			id, piID, activityID, activityTypeStr, stateStr, loopID, assigneeVal, adhocParentID string
 			claimTime, completedTime                                *time.Time
 			loopCounter                                             int
+			expireTime                                      *time.Time
+			termMode                                        int
 		)
-		if err := rows.Scan(&id, &piID, &activityID, &activityTypeStr, &assigneeVal, &adhocParentID, &stateStr, &claimTime, &completedTime, &loopID, &loopCounter); err != nil {
+		if err := rows.Scan(&id, &piID, &activityID, &activityTypeStr, &assigneeVal, &adhocParentID, &stateStr, &claimTime, &completedTime, &loopID, &loopCounter, &expireTime, &termMode); err != nil {
 			return nil, err
 		}
 		result = append(result, &instance.ActivityInstance{
@@ -670,6 +676,8 @@ func scanActivityInstances(rows *sql.Rows) ([]*instance.ActivityInstance, error)
 			Assignee:            assigneeVal,
 						MultiInstanceLoopID: loopID,
 			LoopCounter:         loopCounter,
+			ExpireTime:          expireTime,
+			TermMode:            termMode,
 		})
 	}
 	return result, rows.Err()
