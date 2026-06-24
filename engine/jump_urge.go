@@ -21,6 +21,9 @@ func (e *ProcessEngine) JumpTask(ctx context.Context, activityInstanceID, target
 	if ai.ActivityType != spec.ElementTypeUserTask {
 		return fmt.Errorf("engine: activity %q is not a userTask", activityInstanceID)
 	}
+	if ai.AdhocParentID != "" {
+		return fmt.Errorf("engine: cannot jump a sign activity")
+	}
 
 	pi, err := e.store.GetProcessInstance(ctx, ai.ProcessInstanceID)
 	if err != nil {
@@ -53,6 +56,33 @@ func (e *ProcessEngine) JumpTask(ctx context.Context, activityInstanceID, target
 			}
 			break
 		}
+	}
+
+	// Clean up orphaned sign activities and sign session variables
+	allActs, _ := e.store.ListActivitiesByProcessInstance(ctx, pi.ID)
+	for _, a := range allActs {
+		if a.AdhocParentID == ai.ID && a.State == instance.ActivityStateActive {
+			a.Complete()
+			e.store.UpdateActivityInstance(ctx, a)
+		}
+	}
+	vars2, _ := e.store.GetAllVariables(ctx, pi.ID)
+	for k := range vars2 {
+		if len(k) > 7 && k[len(k)-7:] == "_parent" {
+			if pid, ok := vars2[k].(string); ok && pid == ai.ID {
+				prefix := k[:len(k)-7]
+				for k2 := range vars2 {
+					if len(k2) > len(prefix) && k2[:len(prefix)] == prefix && k2[len(prefix):] != "" && k2[len(prefix):][0] == '_' {
+						e.store.DeleteVariable(ctx, pi.ID, k2)
+					}
+				}
+			}
+		}
+	}
+
+	// Clean up delegate tracking vars
+	for _, key := range []string{"__delegate_to_", "__delegate_orig_", "__delegate_return_"} {
+		e.store.DeleteVariable(ctx, pi.ID, key+ai.ID)
 	}
 
 	// Create new activity at target node

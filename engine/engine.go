@@ -114,6 +114,15 @@ func (e *ProcessEngine) CompleteTask(ctx context.Context, activityInstanceID str
 	}
 
 	// 委派: delegate completed, return to original assignee
+	// Must consume the token first, since handleDelegateCompletion creates a new one at same element
+	tokens, _ := e.store.ListActiveTokens(ctx, ai.ProcessInstanceID)
+	for _, tok := range tokens {
+		if tok.CurrentElementID == ai.ActivityID && tok.State == instance.TokenStateActive {
+			tok.State = instance.TokenStateConsumed
+			e.store.UpdateToken(ctx, tok)
+			break
+		}
+	}
 	if n.handleDelegateCompletion(ctx, pi2, ai) {
 		return nil
 	}

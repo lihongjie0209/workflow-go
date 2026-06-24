@@ -128,6 +128,11 @@ func (e *ProcessEngine) RejectTask(ctx context.Context, activityInstanceID strin
 	if err := e.store.SetVariable(ctx, pi.ID, "__rejectionCount", newCount); err != nil {
 		return fmt.Errorf("engine: set rejection count: %w", err)
 	}
+
+	// Clean up delegate tracking vars (Bug08)
+	for _, key := range []string{"__delegate_to_", "__delegate_orig_", "__delegate_return_"} {
+		e.store.DeleteVariable(ctx, pi.ID, key+ai.ID)
+	}
 	if reason != "" {
 		e.store.SetVariable(ctx, pi.ID, "__rejectionReason", reason)
 	}
