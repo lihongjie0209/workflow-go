@@ -117,11 +117,7 @@ func (e *ProcessEngine) RejectTask(ctx context.Context, activityInstanceID strin
 	newAI := instance.NewActivityInstance(newID(), pi.ID, targetElementID, spec.ElementTypeUserTask)
 	if ut, ok := def.Elements[targetElementID].(*spec.UserTask); ok {
 		av, _ := e.store.GetAllVariables(ctx, pi.ID)
-		if pi.Variables != nil {
-			for k, v := range pi.Variables {
-				av[k] = v
-			}
-		}
+
 		newAI.Assignee = RenderTemplate(ut.Assignee, av)
 	}
 	if err := e.store.CreateActivityInstance(ctx, newAI); err != nil {
