@@ -36,14 +36,21 @@ func (e *ProcessEngine) JumpTask(ctx context.Context, activityInstanceID, target
 
 	// Complete current activity
 	ai.Complete()
-	e.store.UpdateActivityInstance(ctx, ai)
+	if err := e.store.UpdateActivityInstance(ctx, ai); err != nil {
+		return fmt.Errorf("engine: jump complete activity: %w", err)
+	}
 
 	// Consume its token
-	tokens, _ := e.store.ListActiveTokens(ctx, pi.ID)
+	tokens, err := e.store.ListActiveTokens(ctx, pi.ID)
+	if err != nil {
+		return fmt.Errorf("engine: list tokens: %w", err)
+	}
 	for _, tok := range tokens {
 		if tok.CurrentElementID == ai.ActivityID && tok.State == instance.TokenStateActive {
 			tok.State = instance.TokenStateConsumed
-			e.store.UpdateToken(ctx, tok)
+			if err := e.store.UpdateToken(ctx, tok); err != nil {
+				return fmt.Errorf("engine: consume token: %w", err)
+			}
 			break
 		}
 	}
@@ -55,7 +62,9 @@ func (e *ProcessEngine) JumpTask(ctx context.Context, activityInstanceID, target
 	}
 
 	newTok := instance.NewToken(newID(), pi.ID, targetNodeID)
-	e.store.CreateToken(ctx, newTok)
+	if err := e.store.CreateToken(ctx, newTok); err != nil {
+		return fmt.Errorf("engine: create token for target: %w", err)
+	}
 
 	// If jumping to EndEvent, just let checkComplete handle it
 	if targetEl.GetType() == spec.ElementTypeEndEvent {
@@ -71,7 +80,7 @@ func (e *ProcessEngine) JumpTask(ctx context.Context, activityInstanceID, target
 			vars, _ := e.store.GetAllVariables(ctx, pi.ID)
 			newAI.Assignee = RenderTemplate(ut.Assignee, vars)
 		}
-		e.store.CreateActivityInstance(ctx, newAI)
+		if err := e.store.CreateActivityInstance(ctx, newAI); err != nil { return fmt.Errorf("engine: create activity: %w", err) }
 	}
 
 	_ = e.store.SetVariable(ctx, pi.ID, "__jump_from_"+ai.ID, targetNodeID)

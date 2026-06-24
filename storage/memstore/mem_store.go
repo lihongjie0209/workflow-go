@@ -376,6 +376,9 @@ func (s *Store) ListCompletedProcessInstances(_ context.Context, limit int) ([]*
 	for _, pi := range s.instances {
 		if pi.State == instance.ProcessInstanceStateCompleted {
 			result = append(result, pi)
+			if limit > 0 && len(result) >= limit {
+				break
+			}
 		}
 	}
 	return result, nil

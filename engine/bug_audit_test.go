@@ -212,3 +212,107 @@ func TestBug_Float64Assert(t *testing.T) {
 	}
 	t.Log("✅ MI complete with 3 items works")
 }
+
+// B3: RejectTerminate error handling
+func TestBug_RejectSwallowedErrors(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New(); t.Cleanup(func() { s.Close() })
+	e := NewProcessEngine(s)
+	def := &spec.ProcessDefinition{
+		ID: "b3", Key: "b3", Version: 1,
+		Elements: map[string]spec.FlowElement{
+			"start": &spec.StartEvent{ID: "start"}, "A": &spec.UserTask{ID: "A"}, "end": &spec.EndEvent{ID: "end"},
+		},
+		SequenceFlows: []*spec.SequenceFlow{{ID: "s1", SourceRef: "start", TargetRef: "A"}, {ID: "s2", SourceRef: "A", TargetRef: "end"}},
+		StartEventID: "start",
+	}
+	s.CreateProcessDefinition(ctx, def)
+	pi, _ := e.StartProcessInstance(ctx, "b3", nil)
+	acts, _ := s.ListActiveActivities(ctx, pi.ID)
+
+	err := e.RejectTask(ctx, acts[0].ID, RejectTerminate, "bad", "")
+	if err != nil { t.Fatalf("RejectTask: %v", err) }
+	p2, _ := s.GetProcessInstance(ctx, pi.ID)
+	if p2.State != instance.ProcessInstanceStateRejected {
+		t.Errorf("state=%q, want rejected", p2.State)
+	}
+}
+
+// B7: MI assignee rendering uses fresh variables
+func TestBug_MultiInstanceFreshVars(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New(); t.Cleanup(func() { s.Close() })
+	e := NewProcessEngine(s)
+	def := &spec.ProcessDefinition{
+		ID: "b7", Key: "b7", Version: 1,
+		Elements: map[string]spec.FlowElement{
+			"start": &spec.StartEvent{ID: "start"},
+			"mi": &spec.UserTask{ID: "mi", Assignee: "${reviewer}",
+				LoopCharacteristics: &spec.LoopCharacteristics{
+					Collection: "items", ElementVariable: "x",
+				}},
+			"end": &spec.EndEvent{ID: "end"},
+		},
+		SequenceFlows: []*spec.SequenceFlow{{ID: "s1", SourceRef: "start", TargetRef: "mi"}, {ID: "s2", SourceRef: "mi", TargetRef: "end"}},
+		StartEventID: "start",
+	}
+	s.CreateProcessDefinition(ctx, def)
+	pi, _ := e.StartProcessInstance(ctx, "b7", map[string]any{"items": []any{"a", "b"}, "reviewer": "张三"})
+
+	acts, _ := s.ListActiveActivities(ctx, pi.ID)
+	if len(acts) != 2 { t.Fatalf("expected 2 MI, got %d", len(acts)) }
+	for _, a := range acts {
+		if a.Assignee != "张三" {
+			t.Errorf("MI instance assignee=%q, want 张三 (stale variables bug)", a.Assignee)
+		}
+	}
+	t.Log("OK: MI assignee correct")
+}
+
+// B10: memstore limit
+func TestBug_MemstoreListLimit(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New(); t.Cleanup(func() { s.Close() })
+	def := &spec.ProcessDefinition{
+		ID: "b10", Key: "b10", Version: 1,
+		Elements: map[string]spec.FlowElement{
+			"start": &spec.StartEvent{ID: "start"}, "T": &spec.UserTask{ID: "T"}, "end": &spec.EndEvent{ID: "end"},
+		},
+		SequenceFlows: []*spec.SequenceFlow{{ID: "s1", SourceRef: "start", TargetRef: "T"}, {ID: "s2", SourceRef: "T", TargetRef: "end"}},
+		StartEventID: "start",
+	}
+	s.CreateProcessDefinition(ctx, def)
+	pi1 := instance.NewProcessInstance("pi-1", "b10", nil)
+	pi2 := instance.NewProcessInstance("pi-2", "b10", nil)
+	s.CreateProcessInstance(ctx, pi1)
+	s.CreateProcessInstance(ctx, pi2)
+	now := time.Now()
+	pi1.State = instance.ProcessInstanceStateCompleted; pi1.EndedAt = &now; s.UpdateProcessInstance(ctx, pi1)
+	pi2.State = instance.ProcessInstanceStateCompleted; pi2.EndedAt = &now; s.UpdateProcessInstance(ctx, pi2)
+
+	completed, err := s.ListCompletedProcessInstances(ctx, 1)
+	if err != nil { t.Fatalf("ListCompletedProcessInstances: %v", err) }
+	if len(completed) > 1 {
+		t.Errorf("limit=1 returned %d records (memstore bug)", len(completed))
+	}
+}
+
+// B12: triggerEventElement no panic
+func TestBug_TriggerEventNoPanic(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New(); t.Cleanup(func() { s.Close() })
+	e := NewProcessEngine(s)
+	def := &spec.ProcessDefinition{
+		ID: "b12", Key: "b12", Version: 1,
+		Elements: map[string]spec.FlowElement{
+			"start": &spec.StartEvent{ID: "start"}, "T": &spec.UserTask{ID: "T"}, "end": &spec.EndEvent{ID: "end"},
+		},
+		SequenceFlows: []*spec.SequenceFlow{{ID: "s1", SourceRef: "start", TargetRef: "T"}, {ID: "s2", SourceRef: "T", TargetRef: "end"}},
+		StartEventID: "start",
+	}
+	s.CreateProcessDefinition(ctx, def)
+	pi, _ := e.StartProcessInstance(ctx, "b12", nil)
+	n := &navigator{store: s}
+	err := n.triggerEventElement(ctx, pi.ID, "nonexistent-element")
+	if err != nil { t.Logf("triggerEventElement error (expected): %v", err) }
+}

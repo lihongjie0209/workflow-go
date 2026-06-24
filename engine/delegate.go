@@ -46,35 +46,33 @@ func (n *navigator) handleDelegateCompletion(ctx context.Context, pi *instance.P
 		return false // not a delegate task
 	}
 
-	origStr, _ := origAssignee.(string)
-
-	// Clean up delegate tracking variables
-	_ = n.store.DeleteVariable(ctx, pi.ID, delegateKey)
-	_ = n.store.DeleteVariable(ctx, pi.ID, origKey)
-
-	// Create return activity for original assignee
+	// Create return activity for original assignee (ORDER: activity first, then token)
 	def, err := n.store.GetProcessDefinition(ctx, pi.ProcessDefinitionID)
 	if err != nil {
 		return false
 	}
 
-	newTok := instance.NewToken(newID(), pi.ID, ai.ActivityID)
-	if err := n.store.CreateToken(ctx, newTok); err != nil {
-		return false
-	}
+	origStr, _ := origAssignee.(string)
 	newAI := instance.NewActivityInstance(newID(), pi.ID, ai.ActivityID, spec.ElementTypeUserTask)
 	newAI.Assignee = origStr
-	// Re-render assignee from definition if template
 	if ut, ok := def.Elements[ai.ActivityID].(*spec.UserTask); ok {
-		vars2, _ := n.store.GetAllVariables(ctx, pi.ID)
-		newAI.Assignee = RenderTemplate(ut.Assignee, vars2)
+		vars2, err := n.store.GetAllVariables(ctx, pi.ID)
+		if err == nil {
+			newAI.Assignee = RenderTemplate(ut.Assignee, vars2)
+		}
 	}
 	if err := n.store.CreateActivityInstance(ctx, newAI); err != nil {
 		return false
 	}
 
-	// Record delegate-to info for audit
-	_ = n.store.SetVariable(ctx, pi.ID, "__delegate_return_"+ai.ID, true)
+	newTok := instance.NewToken(newID(), pi.ID, ai.ActivityID)
+	if err := n.store.CreateToken(ctx, newTok); err != nil {
+		// Token not created, activity is created - acceptable fail state
+		return false
+	}
+
+	// Record delegate tracking
+	n.store.SetVariable(ctx, pi.ID, "__delegate_return_"+ai.ID, true)
 
 	return true
 }

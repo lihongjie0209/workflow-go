@@ -74,12 +74,8 @@ func (e *ProcessEngine) CompleteTask(ctx context.Context, activityInstanceID str
 		return fmt.Errorf("engine: update activity instance %q: %w", activityInstanceID, err)
 	}
 	recordHistory(ctx, e.store, ai)
-	if err := e.store.DeleteTimerJobsByInstance(ctx, ai.ProcessInstanceID); err != nil {
-		return fmt.Errorf("engine: cleanup timer jobs: %w", err)
-	}
-	if err := e.store.DeleteSubscriptionsByInstance(ctx, ai.ProcessInstanceID); err != nil {
-		return fmt.Errorf("engine: cleanup subscriptions: %w", err)
-	}
+
+	// Merge variables before sign/delegate handling (so they're visible downstream)
 	if len(variables) > 0 {
 		pi, err := e.store.GetProcessInstance(ctx, ai.ProcessInstanceID)
 		if err != nil {
@@ -103,18 +99,31 @@ func (e *ProcessEngine) CompleteTask(ctx context.Context, activityInstanceID str
 
 	// 加签
 	if ai.AdhocParentID != "" {
-		pi2, _ := e.store.GetProcessInstance(ctx, ai.ProcessInstanceID)
+		pi2, err := e.store.GetProcessInstance(ctx, ai.ProcessInstanceID)
+		if err != nil {
+			return fmt.Errorf("engine: get instance: %w", err)
+		}
 		return n.handleSignCompletion(ctx, pi2, ai, variables)
 	}
-	pi2, _ := e.store.GetProcessInstance(ctx, ai.ProcessInstanceID)
+	pi2, err := e.store.GetProcessInstance(ctx, ai.ProcessInstanceID)
+	if err != nil {
+		return fmt.Errorf("engine: get instance: %w", err)
+	}
 	if hasPendingSigns(ctx, e.store, pi2, ai) {
 		return nil
 	}
 
 	// 委派: delegate completed, return to original assignee
-	n2 := &navigator{store: e.store}
-	if n2.handleDelegateCompletion(ctx, pi2, ai) {
-		return nil // task returned to original assignee, wait for them
+	if n.handleDelegateCompletion(ctx, pi2, ai) {
+		return nil
+	}
+
+	// Clean up timer jobs and signal subscriptions for normal flow advancement.
+	if err := e.store.DeleteTimerJobsByInstance(ctx, ai.ProcessInstanceID); err != nil {
+		return fmt.Errorf("engine: cleanup timer jobs: %w", err)
+	}
+	if err := e.store.DeleteSubscriptionsByInstance(ctx, ai.ProcessInstanceID); err != nil {
+		return fmt.Errorf("engine: cleanup subscriptions: %w", err)
 	}
 
 	if err := n.navigateFrom(ctx, ai.ProcessInstanceID, ai.ActivityID); err != nil {
