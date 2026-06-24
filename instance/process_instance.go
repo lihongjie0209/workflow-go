@@ -13,6 +13,7 @@ const (
 	ProcessInstanceStateSuspended  ProcessInstanceState = "suspended"
 	ProcessInstanceStateCompleted  ProcessInstanceState = "completed"
 	ProcessInstanceStateTerminated ProcessInstanceState = "terminated"
+	ProcessInstanceStateRejected   ProcessInstanceState = "rejected"
 )
 
 // ProcessInstance represents one execution of a ProcessDefinition.

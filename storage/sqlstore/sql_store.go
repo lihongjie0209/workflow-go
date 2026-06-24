@@ -305,8 +305,8 @@ func (s *Store) ListProcessInstances(ctx context.Context, defID string) ([]*inst
 
 func (s *Store) CreateActivityInstance(ctx context.Context, ai *instance.ActivityInstance) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO activity_instances (id, process_instance_id, activity_id, activity_type, assignee, state, multi_instance_loop, loop_counter) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ai.ID, ai.ProcessInstanceID, ai.ActivityID, string(ai.ActivityType), ai.Assignee, string(ai.State), ai.MultiInstanceLoopID, ai.LoopCounter)
+		`INSERT INTO activity_instances (id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, multi_instance_loop, loop_counter) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ai.ID, ai.ProcessInstanceID, ai.ActivityID, string(ai.ActivityType), ai.Assignee, ai.AdhocParentID, string(ai.State), ai.MultiInstanceLoopID, ai.LoopCounter)
 	if err != nil {
 		return fmt.Errorf("sqlstore: create activity instance %q: %w", ai.ID, err)
 	}
@@ -337,7 +337,7 @@ func (s *Store) GetActivityInstance(ctx context.Context, id string) (*instance.A
 		adhocParentID                             string
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE id = ?`, id).
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE id = ?`, id).
 		Scan(&id, &piID, &activityID, &activityTypeStr, &assigneeVal, &adhocParentID, &stateStr, &claimTime, &completedTime, &loopID, &loopCounter)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("sqlstore: activity instance %q not found: %w", id, storage.ErrNotFound)
@@ -362,7 +362,7 @@ func (s *Store) GetActivityInstance(ctx context.Context, id string) (*instance.A
 
 func (s *Store) ListActiveActivities(ctx context.Context, processInstanceID string) ([]*instance.ActivityInstance, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE process_instance_id = ? AND state = 'active'`,
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE process_instance_id = ? AND state = 'active'`,
 		processInstanceID)
 	if err != nil {
 		return nil, err
@@ -373,7 +373,7 @@ func (s *Store) ListActiveActivities(ctx context.Context, processInstanceID stri
 
 func (s *Store) ListActivitiesByProcessInstance(ctx context.Context, processInstanceID string) ([]*instance.ActivityInstance, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE process_instance_id = ?`,
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE process_instance_id = ?`,
 		processInstanceID)
 	if err != nil {
 		return nil, err
@@ -384,7 +384,7 @@ func (s *Store) ListActivitiesByProcessInstance(ctx context.Context, processInst
 
 func (s *Store) ListActivitiesByLoopID(ctx context.Context, processInstanceID, loopID string) ([]*instance.ActivityInstance, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE process_instance_id = ? AND multi_instance_loop = ?`,
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE process_instance_id = ? AND multi_instance_loop = ?`,
 		processInstanceID, loopID)
 	if err != nil {
 		return nil, err

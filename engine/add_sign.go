@@ -41,7 +41,13 @@ func (n *navigator) handleSignCompletion(ctx context.Context, pi *instance.Proce
 	for _, tok := range tokens {
 		if tok.CurrentElementID == parentAI.ActivityID { excess = append(excess, tok.ID) }
 	}
-	for len(excess) > 1 { _ = n.store.DeleteToken(ctx, excess[0]); excess = excess[1:] }
+	// Keep at most 1 token (for forward/parallel: parent's token stays).
+	// For backward sign (parent already completed): consume ALL tokens.
+	keep := 1
+	if parentAI.State == instance.ActivityStateCompleted {
+		keep = 0
+	}
+	for len(excess) > keep { _ = n.store.DeleteToken(ctx, excess[0]); excess = excess[1:] }
 	for k := range vars {
 		if len(k) > len(signID) && k[:len(signID)] == signID { _ = n.store.DeleteVariable(ctx, pi.ID, k) }
 	}
