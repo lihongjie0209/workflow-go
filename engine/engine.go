@@ -111,6 +111,12 @@ func (e *ProcessEngine) CompleteTask(ctx context.Context, activityInstanceID str
 		return nil
 	}
 
+	// 委派: delegate completed, return to original assignee
+	n2 := &navigator{store: e.store}
+	if n2.handleDelegateCompletion(ctx, pi2, ai) {
+		return nil // task returned to original assignee, wait for them
+	}
+
 	if err := n.navigateFrom(ctx, ai.ProcessInstanceID, ai.ActivityID); err != nil {
 		return fmt.Errorf("engine: navigate from task %q: %w", ai.ActivityID, err)
 	}
