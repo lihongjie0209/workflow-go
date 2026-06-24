@@ -289,6 +289,8 @@ func (s *Store) GetProcessInstance(ctx context.Context, id string) (*instance.Pr
 		Variables:           vars,
 		StartedAt:           startedAt,
 		EndedAt:             endedAt,
+			ParentProcessInstanceID: parentPIID,
+			ParentActivityID:        parentActID,
 	}, nil
 }
 
@@ -317,8 +319,8 @@ func (s *Store) CreateActivityInstance(ctx context.Context, ai *instance.Activit
 
 func (s *Store) UpdateActivityInstance(ctx context.Context, ai *instance.ActivityInstance) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE activity_instances SET state = ?, assignee = ?, claim_time = ?, completed_time = ?, multi_instance_loop = ?, loop_counter = ?, expire_time = ?, term_mode = ? WHERE id = ?`,
-		string(ai.State), ai.Assignee, ai.ClaimTime, ai.CompletedTime, ai.MultiInstanceLoopID, ai.LoopCounter, ai.ExpireTime, ai.TermMode, ai.ID)
+		`UPDATE activity_instances SET state = ?, assignee = ?, adhoc_parent_id = ?, claim_time = ?, completed_time = ?, multi_instance_loop = ?, loop_counter = ?, expire_time = ?, term_mode = ? WHERE id = ?`,
+		string(ai.State), ai.Assignee, ai.AdhocParentID, ai.ClaimTime, ai.CompletedTime, ai.MultiInstanceLoopID, ai.LoopCounter, ai.ExpireTime, ai.TermMode, ai.ID)
 	if err != nil {
 		return err
 	}
@@ -359,8 +361,11 @@ func (s *Store) GetActivityInstance(ctx context.Context, id string) (*instance.A
 		ClaimTime:         claimTime,
 		CompletedTime:     completedTime,
 		Assignee:            assigneeVal,
-				MultiInstanceLoopID: loopID,
-		LoopCounter:         loopCounter,
+		AdhocParentID:       adhocParentID,
+		MultiInstanceLoopID: loopID,
+			LoopCounter:         loopCounter,
+			ExpireTime:          expireTime,
+			TermMode:            termMode,
 	}, nil
 }
 
@@ -674,7 +679,8 @@ func scanActivityInstances(rows *sql.Rows) ([]*instance.ActivityInstance, error)
 			ClaimTime:         claimTime,
 			CompletedTime:     completedTime,
 			Assignee:            assigneeVal,
-						MultiInstanceLoopID: loopID,
+			AdhocParentID:       adhocParentID,
+			MultiInstanceLoopID: loopID,
 			LoopCounter:         loopCounter,
 			ExpireTime:          expireTime,
 			TermMode:            termMode,
