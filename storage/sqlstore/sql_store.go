@@ -96,6 +96,7 @@ func (s *Store) init() error {
 		activity_id TEXT NOT NULL,
 		activity_type TEXT NOT NULL,
 		assignee TEXT NOT NULL DEFAULT '',
+		adhoc_parent_id TEXT NOT NULL DEFAULT '',
 		state TEXT NOT NULL DEFAULT 'active',
 		claim_time TIMESTAMP,
 		completed_time TIMESTAMP,
@@ -304,8 +305,8 @@ func (s *Store) ListProcessInstances(ctx context.Context, defID string) ([]*inst
 
 func (s *Store) CreateActivityInstance(ctx context.Context, ai *instance.ActivityInstance) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO activity_instances (id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, multi_instance_loop, loop_counter) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ai.ID, ai.ProcessInstanceID, ai.ActivityID, string(ai.ActivityType), ai.Assignee, ai.AdhocParentID, string(ai.State), ai.MultiInstanceLoopID, ai.LoopCounter)
+		`INSERT INTO activity_instances (id, process_instance_id, activity_id, activity_type, assignee, state, multi_instance_loop, loop_counter) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ai.ID, ai.ProcessInstanceID, ai.ActivityID, string(ai.ActivityType), ai.Assignee, string(ai.State), ai.MultiInstanceLoopID, ai.LoopCounter)
 	if err != nil {
 		return fmt.Errorf("sqlstore: create activity instance %q: %w", ai.ID, err)
 	}
@@ -336,7 +337,7 @@ func (s *Store) GetActivityInstance(ctx context.Context, id string) (*instance.A
 		adhocParentID                             string
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE id = ?`, id).
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, state, claim_time, completed_time, multi_instance_loop, loop_counter FROM activity_instances WHERE id = ?`, id).
 		Scan(&id, &piID, &activityID, &activityTypeStr, &assigneeVal, &adhocParentID, &stateStr, &claimTime, &completedTime, &loopID, &loopCounter)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("sqlstore: activity instance %q not found: %w", id, storage.ErrNotFound)
@@ -354,8 +355,7 @@ func (s *Store) GetActivityInstance(ctx context.Context, id string) (*instance.A
 		ClaimTime:         claimTime,
 		CompletedTime:     completedTime,
 		Assignee:            assigneeVal,
-		AdhocParentID:       adhocParentID,
-		MultiInstanceLoopID: loopID,
+				MultiInstanceLoopID: loopID,
 		LoopCounter:         loopCounter,
 	}, nil
 }
@@ -668,8 +668,7 @@ func scanActivityInstances(rows *sql.Rows) ([]*instance.ActivityInstance, error)
 			ClaimTime:         claimTime,
 			CompletedTime:     completedTime,
 			Assignee:            assigneeVal,
-			AdhocParentID:       adhocParentID,
-			MultiInstanceLoopID: loopID,
+						MultiInstanceLoopID: loopID,
 			LoopCounter:         loopCounter,
 		})
 	}

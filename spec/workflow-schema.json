@@ -1,0 +1,223 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/lihongjie/workflow-go/spec/workflow-schema.json",
+  "title": "Workflow Definition",
+  "description": "JSON Schema for workflow-go process definitions. Defines the structure of a BPMN-like workflow with gateways, events, tasks, and sub-processes.",
+  "type": "object",
+  "required": ["id", "startEventId", "elements", "sequenceFlows"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "description": "Unique identifier for the process definition",
+      "examples": ["leave-approval:v1", "order-fulfillment"]
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable name",
+      "examples": ["Leave Approval Process"]
+    },
+    "key": {
+      "type": "string",
+      "description": "Business key for versioning; used with version field for deployment",
+      "examples": ["leave-approval"]
+    },
+    "version": {
+      "type": "integer",
+      "description": "Version number, auto-incremented on deployment",
+      "minimum": 1,
+      "examples": [1, 2]
+    },
+    "deploymentId": {
+      "type": "string",
+      "description": "Deployment identifier (reserved for future use)"
+    },
+    "startEventId": {
+      "type": "string",
+      "description": "ID of the start event element; must reference an element with type 'startEvent'",
+      "examples": ["start"]
+    },
+    "elements": {
+      "type": "array",
+      "description": "List of flow elements (nodes) in the process",
+      "items": { "$ref": "#/definitions/flowElement" },
+      "minItems": 1
+    },
+    "sequenceFlows": {
+      "type": "array",
+      "description": "List of sequence flows (edges) connecting elements",
+      "items": { "$ref": "#/definitions/sequenceFlow" },
+      "minItems": 0
+    }
+  },
+  "definitions": {
+    "flowElement": {
+      "type": "object",
+      "description": "Base type for all flow elements. The 'type' field determines which additional fields apply.",
+      "required": ["id", "type"],
+      "properties": {
+        "id": { "type": "string", "description": "Element ID, unique within the process definition" },
+        "name": { "type": "string", "description": "Element display name; supports ${} variable templates" },
+        "type": {
+          "type": "string",
+          "description": "Element type",
+          "enum": [
+            "startEvent", "endEvent", "userTask", "serviceTask",
+            "exclusiveGateway", "parallelGateway", "inclusiveGateway",
+            "boundaryEvent", "intermediateCatchEvent", "intermediateThrowEvent",
+            "callActivity"
+          ]
+        }
+      },
+      "allOf": [
+        { "if": { "properties": { "type": { "const": "startEvent" } } },
+          "then": { "title": "StartEvent", "description": "Process starting point. Must have exactly one outgoing sequence flow." } },
+        { "if": { "properties": { "type": { "const": "endEvent" } } },
+          "then": { "title": "EndEvent", "description": "Process termination point. Consumes incoming token and triggers completion check." } },
+        { "if": { "properties": { "type": { "const": "userTask" } } },
+          "then": {
+            "title": "UserTask",
+            "description": "Human task requiring explicit completion via CompleteTask API. Supports dynamic assignee via ${} template.",
+            "properties": {
+              "assignee": { "type": "string", "description": "User or ${expression} assigned to this task" },
+              "candidateUsers": { "type": "array", "items": { "type": "string" }, "description": "List of candidate users" },
+              "candidateGroup": { "type": "string", "description": "Candidate group name" },
+              "formKey": { "type": "string", "description": "Form identifier; supports ${} templates" },
+              "loopCharacteristics": { "$ref": "#/definitions/loopCharacteristics" }
+            }
+          }
+        },
+        { "if": { "properties": { "type": { "const": "serviceTask" } } },
+          "then": {
+            "title": "ServiceTask",
+            "description": "Auto-completing task. Completes immediately upon arrival.",
+            "properties": {
+              "serviceType": { "type": "string", "description": "Service integration type (reserved)" }
+            }
+          }
+        },
+        { "if": { "properties": { "type": { "const": "exclusiveGateway" } } },
+          "then": {
+            "title": "ExclusiveGateway (XOR)",
+            "description": "Routes to exactly one outgoing flow. Conditions evaluated in order; first match wins. DefaultFlowID is used when no condition matches.",
+            "properties": {
+              "defaultFlowId": { "type": "string", "description": "Fallback sequence flow ID when no condition matches" }
+            }
+          }
+        },
+        { "if": { "properties": { "type": { "const": "parallelGateway" } } },
+          "then": {
+            "title": "ParallelGateway (AND)",
+            "description": "Synchronizes (join) or splits (fork) execution paths. Join waits for ALL incoming tokens. Split activates ALL outgoing flows."
+          }
+        },
+        { "if": { "properties": { "type": { "const": "inclusiveGateway" } } },
+          "then": {
+            "title": "InclusiveGateway (OR)",
+            "description": "Evaluates conditions on all outgoing flows; activates every flow whose condition is true. DefaultFlowID used when no condition matches.",
+            "properties": {
+              "defaultFlowId": { "type": "string", "description": "Fallback flow ID" }
+            }
+          }
+        },
+        { "if": { "properties": { "type": { "const": "boundaryEvent" } } },
+          "then": {
+            "title": "BoundaryEvent",
+            "description": "Event attached to a UserTask or ServiceTask. Triggers when timer fires or signal/message arrives. Only interrupting (CancelActivity=true) supported in v1.",
+            "properties": {
+              "attachedToRef": { "type": "string", "description": "ID of the activity this event attaches to" },
+              "cancelActivity": { "type": "boolean", "description": "True = interrupting (consumes the activity's token). Default: true" },
+              "timerDefinition": { "$ref": "#/definitions/timerEventDefinition" },
+              "signalDefinition": { "$ref": "#/definitions/signalEventDefinition" },
+              "messageDefinition": { "$ref": "#/definitions/messageEventDefinition" }
+            },
+            "required": ["attachedToRef"]
+          }
+        },
+        { "if": { "properties": { "type": { "const": "intermediateCatchEvent" } } },
+          "then": {
+            "title": "IntermediateCatchEvent",
+            "description": "Wait state in the main flow. Pauses execution until the specified event (timer/signal/message) occurs.",
+            "properties": {
+              "timerDefinition": { "$ref": "#/definitions/timerEventDefinition" },
+              "signalDefinition": { "$ref": "#/definitions/signalEventDefinition" },
+              "messageDefinition": { "$ref": "#/definitions/messageEventDefinition" }
+            }
+          }
+        },
+        { "if": { "properties": { "type": { "const": "intermediateThrowEvent" } } },
+          "then": {
+            "title": "IntermediateThrowEvent",
+            "description": "Fires a signal or message and continues immediately without waiting.",
+            "properties": {
+              "signalDefinition": { "$ref": "#/definitions/signalEventDefinition" },
+              "messageDefinition": { "$ref": "#/definitions/messageEventDefinition" }
+            }
+          }
+        },
+        { "if": { "properties": { "type": { "const": "callActivity" } } },
+          "then": {
+            "title": "CallActivity (SubProcess)",
+            "description": "Calls another process definition as a sub-process. Waits for the sub-process to complete before continuing.",
+            "properties": {
+              "calledElement": { "type": "string", "description": "The 'key' of the process definition to call" },
+              "inheritVariables": { "type": "boolean", "description": "If true, copies all parent process variables into the child" }
+            },
+            "required": ["calledElement"]
+          }
+        }
+      ]
+    },
+    "sequenceFlow": {
+      "type": "object",
+      "description": "A directed edge connecting two flow elements.",
+      "required": ["id", "sourceRef", "targetRef"],
+      "properties": {
+        "id": { "type": "string", "description": "Unique flow identifier" },
+        "name": { "type": "string", "description": "Flow name/description" },
+        "sourceRef": { "type": "string", "description": "ID of the source element" },
+        "targetRef": { "type": "string", "description": "ID of the target element" },
+        "conditionExpression": {
+          "type": "string",
+          "description": "Optional ${expression} condition for gateway-outgoing flows. Evaluated at runtime against process variables.",
+          "examples": ["${amount > 1000}", "${approved == false}"]
+        }
+      }
+    },
+    "loopCharacteristics": {
+      "type": "object",
+      "description": "Multi-instance configuration for a UserTask (会签). When set, generates multiple activity instances.",
+      "properties": {
+        "isSequential": { "type": "boolean", "description": "True = sequential (one at a time), False = parallel (all at once)" },
+        "loopCardinality": { "type": "string", "description": "Fixed number of instances as a numeric expression" },
+        "collection": { "type": "string", "description": "Variable name of the input list/array" },
+        "elementVariable": { "type": "string", "description": "Variable name assigned per instance from the collection item" },
+        "completionCondition": { "type": "string", "description": "${expression} for early termination; evaluated after each instance completes" }
+      }
+    },
+    "timerEventDefinition": {
+      "type": "object",
+      "description": "Defines a timer trigger. One of timerDuration, timerDate, or timerCycle is required.",
+      "properties": {
+        "timerDuration": { "type": "string", "description": "ISO 8601 duration (e.g., PT1H, PT30M, PT1H30M)" },
+        "timerDate": { "type": "string", "description": "Fixed date/time (RFC3339)" },
+        "timerCycle": { "type": "string", "description": "Repeating interval (ISO 8601)" }
+      }
+    },
+    "signalEventDefinition": {
+      "type": "object",
+      "description": "Defines a named signal trigger for cross-process coordination.",
+      "required": ["signalRef"],
+      "properties": {
+        "signalRef": { "type": "string", "description": "Signal name; matched with ReceiveSignal calls" }
+      }
+    },
+    "messageEventDefinition": {
+      "type": "object",
+      "description": "Defines a named message trigger. In v1, messages use the same subscription mechanism as signals.",
+      "required": ["messageRef"],
+      "properties": {
+        "messageRef": { "type": "string", "description": "Message name" }
+      }
+    }
+  }
+}

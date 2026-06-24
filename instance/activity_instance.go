@@ -21,8 +21,6 @@ const (
 // For multi-instance activities (会签), MultiInstanceLoopID groups instances
 // that belong to the same loop, and LoopCounter tracks the 0-based index.
 // Assignee records the resolved user/expression value when the task was created.
-// AdhocParentID is set when this is an ad-hoc sign activity added dynamically
-// via AddSign (加签); the parent activity waits for sign activities to complete.
 type ActivityInstance struct {
 	ID                  string
 	ProcessInstanceID   string
