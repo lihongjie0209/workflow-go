@@ -6,6 +6,7 @@ package memstore
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -382,6 +383,193 @@ func (s *Store) ListCompletedProcessInstances(_ context.Context, limit int) ([]*
 		}
 	}
 	return result, nil
+}
+
+// --- QueryStore ---
+
+func (s *Store) QueryDefinitions(_ context.Context, q storage.DefQuery) ([]*spec.ProcessDefinition, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var filtered []*spec.ProcessDefinition
+	for _, def := range s.definitions {
+		if q.Key != "" && def.Key != q.Key {
+			continue
+		}
+		if q.Version > 0 && def.Version != q.Version {
+			continue
+		}
+		if q.Name != "" && !strings.Contains(strings.ToLower(def.Name), strings.ToLower(q.Name)) {
+			continue
+		}
+		filtered = append(filtered, def)
+	}
+	total := len(filtered)
+	offset := q.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = total
+	}
+	if offset >= total {
+		return []*spec.ProcessDefinition{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return filtered[offset:end], total, nil
+}
+
+func (s *Store) QueryProcessInstances(_ context.Context, q storage.InstQuery) ([]*instance.ProcessInstance, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Resolve DefKey to set of def IDs
+	var defIDs map[string]bool
+	if q.DefKey != "" {
+		defIDs = make(map[string]bool)
+		for _, def := range s.definitions {
+			if def.Key == q.DefKey {
+				defIDs[def.ID] = true
+			}
+		}
+	}
+
+	var filtered []*instance.ProcessInstance
+	for _, pi := range s.instances {
+		if q.DefID != "" && pi.ProcessDefinitionID != q.DefID {
+			continue
+		}
+		if q.State != "" && string(pi.State) != q.State {
+			continue
+		}
+		if q.DefKey != "" && !defIDs[pi.ProcessDefinitionID] {
+			continue
+		}
+		if q.Initiator != "" {
+			v, ok := pi.Variables["initiator"]
+			if !ok || v != q.Initiator {
+				continue
+			}
+		}
+		if q.StartAfter != nil && pi.StartedAt.Before(*q.StartAfter) {
+			continue
+		}
+		if q.StartBefore != nil && pi.StartedAt.After(*q.StartBefore) {
+			continue
+		}
+		filtered = append(filtered, pi)
+	}
+	total := len(filtered)
+	offset := q.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = total
+	}
+	if offset >= total {
+		return []*instance.ProcessInstance{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return filtered[offset:end], total, nil
+}
+
+func (s *Store) QueryActivities(_ context.Context, q storage.ActQuery) ([]*instance.ActivityInstance, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var filtered []*instance.ActivityInstance
+	for _, a := range s.activities {
+		if q.ProcessInstanceID != "" && a.ProcessInstanceID != q.ProcessInstanceID {
+			continue
+		}
+		if q.Assignee != "" && a.Assignee != q.Assignee {
+			continue
+		}
+		if q.ActivityID != "" && a.ActivityID != q.ActivityID {
+			continue
+		}
+		if q.ActivityType != "" && string(a.ActivityType) != q.ActivityType {
+			continue
+		}
+		if q.State != "" && string(a.State) != q.State {
+			continue
+		}
+		if q.IsSign != nil {
+			isSign := a.AdhocParentID != ""
+			if *q.IsSign != isSign {
+				continue
+			}
+		}
+		filtered = append(filtered, a)
+	}
+	total := len(filtered)
+	offset := q.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = total
+	}
+	if offset >= total {
+		return []*instance.ActivityInstance{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return filtered[offset:end], total, nil
+}
+
+func (s *Store) QueryHistoricActivities(_ context.Context, q storage.HistQuery) ([]*instance.HistoricActivityInstance, int, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	var filtered []*instance.HistoricActivityInstance
+	for _, h := range s.historicActivities {
+		if q.ProcessInstanceID != "" && h.ProcessInstanceID != q.ProcessInstanceID {
+			continue
+		}
+		if q.ActivityID != "" && h.ActivityID != q.ActivityID {
+			continue
+		}
+		if q.Assignee != "" {
+			v, ok := h.Variables["assignee"]
+			if !ok || v != q.Assignee {
+				continue
+			}
+		}
+		if q.CompletedAfter != nil && h.CompletedAt.Before(*q.CompletedAfter) {
+			continue
+		}
+		if q.CompletedBefore != nil && h.CompletedAt.After(*q.CompletedBefore) {
+			continue
+		}
+		filtered = append(filtered, h)
+	}
+	total := len(filtered)
+	offset := q.Offset
+	if offset < 0 {
+		offset = 0
+	}
+	limit := q.Limit
+	if limit <= 0 {
+		limit = total
+	}
+	if offset >= total {
+		return []*instance.HistoricActivityInstance{}, total, nil
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	return filtered[offset:end], total, nil
 }
 
 // --- TimerJobStore ---

@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/lihongjie/workflow-go/instance"
 	"github.com/lihongjie/workflow-go/spec"
@@ -33,16 +34,18 @@ func (e *ProcessEngine) ReclaimTask(ctx context.Context, currentActivityID strin
 		return err
 	}
 
-	// Find the previous active/completed activity at this element
+	// Find the previous completed UserTask (not StartEvent or gates)
 	allActs, _ := e.store.ListActivitiesByProcessInstance(ctx, pi.ID)
 
-	// Find the most recently completed activity that is not at the current element
 	var prevActivityID string
-	for i := len(allActs) - 1; i >= 0; i-- {
-		a := allActs[i]
-		if a.State == instance.ActivityStateCompleted && a.ActivityID != ai.ActivityID {
-			prevActivityID = a.ActivityID
-			break
+	var latestCompleted time.Time
+	for _, a := range allActs {
+		if a.State == instance.ActivityStateCompleted && a.CompletedTime != nil &&
+			a.ActivityType == spec.ElementTypeUserTask && a.ActivityID != ai.ActivityID {
+			if a.CompletedTime.After(latestCompleted) {
+				latestCompleted = *a.CompletedTime
+				prevActivityID = a.ActivityID
+			}
 		}
 	}
 	if prevActivityID == "" {

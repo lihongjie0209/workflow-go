@@ -712,6 +712,238 @@ func scanTokens(rows *sql.Rows) ([]*instance.Token, error) {
 
 
 
+// --- QueryStore ---
+
+func (s *Store) QueryDefinitions(ctx context.Context, q storage.DefQuery) ([]*spec.ProcessDefinition, int, error) {
+	where := "WHERE 1=1"
+	args := []any{}
+	if q.Key != "" {
+		where += " AND key = ?"
+		args = append(args, q.Key)
+	}
+	if q.Version > 0 {
+		where += " AND version = ?"
+		args = append(args, q.Version)
+	}
+	if q.Name != "" {
+		where += " AND name LIKE ?"
+		args = append(args, "%"+q.Name+"%")
+	}
+
+	var total int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM process_definitions "+where, args...).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if total == 0 {
+		return []*spec.ProcessDefinition{}, 0, nil
+	}
+
+	dataArgs := make([]any, len(args))
+	copy(dataArgs, args)
+	dataArgs = append(dataArgs, q.Limit, q.Offset)
+	rows, err := s.db.QueryContext(ctx, "SELECT data FROM process_definitions "+where+" ORDER BY version DESC LIMIT ? OFFSET ?", dataArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var result []*spec.ProcessDefinition
+	for rows.Next() {
+		var data []byte
+		if err := rows.Scan(&data); err != nil {
+			return nil, 0, err
+		}
+		def, err := deserializeProcessDefinition(data)
+		if err != nil {
+			return nil, 0, err
+		}
+		result = append(result, def)
+	}
+	return result, total, rows.Err()
+}
+
+func (s *Store) QueryProcessInstances(ctx context.Context, q storage.InstQuery) ([]*instance.ProcessInstance, int, error) {
+	where := "WHERE 1=1"
+	args := []any{}
+	if q.DefID != "" {
+		where += " AND def_id = ?"
+		args = append(args, q.DefID)
+	}
+	if q.State != "" {
+		where += " AND state = ?"
+		args = append(args, q.State)
+	}
+	if q.DefKey != "" {
+		where += " AND def_id IN (SELECT id FROM process_definitions WHERE key = ?)"
+		args = append(args, q.DefKey)
+	}
+	if q.Initiator != "" {
+		where += " AND json_extract(variables, '$.initiator') = ?"
+		args = append(args, q.Initiator)
+	}
+	if q.StartAfter != nil {
+		where += " AND started_at >= ?"
+		args = append(args, *q.StartAfter)
+	}
+	if q.StartBefore != nil {
+		where += " AND started_at <= ?"
+		args = append(args, *q.StartBefore)
+	}
+
+	var total int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM process_instances "+where, args...).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if total == 0 {
+		return []*instance.ProcessInstance{}, 0, nil
+	}
+
+	dataArgs := make([]any, len(args))
+	copy(dataArgs, args)
+	dataArgs = append(dataArgs, q.Limit, q.Offset)
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT id, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances "+where+" ORDER BY started_at DESC LIMIT ? OFFSET ?",
+		dataArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	result, err := scanProcessInstances(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return result, total, nil
+}
+
+func (s *Store) QueryActivities(ctx context.Context, q storage.ActQuery) ([]*instance.ActivityInstance, int, error) {
+	where := "WHERE 1=1"
+	args := []any{}
+	if q.ProcessInstanceID != "" {
+		where += " AND process_instance_id = ?"
+		args = append(args, q.ProcessInstanceID)
+	}
+	if q.Assignee != "" {
+		where += " AND assignee = ?"
+		args = append(args, q.Assignee)
+	}
+	if q.ActivityID != "" {
+		where += " AND activity_id = ?"
+		args = append(args, q.ActivityID)
+	}
+	if q.ActivityType != "" {
+		where += " AND activity_type = ?"
+		args = append(args, q.ActivityType)
+	}
+	if q.State != "" {
+		where += " AND state = ?"
+		args = append(args, q.State)
+	}
+	if q.IsSign != nil {
+		if *q.IsSign {
+			where += " AND adhoc_parent_id != ''"
+		} else {
+			where += " AND adhoc_parent_id = ''"
+		}
+	}
+
+	var total int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM activity_instances "+where, args...).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if total == 0 {
+		return []*instance.ActivityInstance{}, 0, nil
+	}
+
+	dataArgs := make([]any, len(args))
+	copy(dataArgs, args)
+	dataArgs = append(dataArgs, q.Limit, q.Offset)
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode FROM activity_instances "+where+" ORDER BY claim_time ASC LIMIT ? OFFSET ?",
+		dataArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	result, err := scanActivityInstances(rows)
+	if err != nil {
+		return nil, 0, err
+	}
+	return result, total, nil
+}
+
+func (s *Store) QueryHistoricActivities(ctx context.Context, q storage.HistQuery) ([]*instance.HistoricActivityInstance, int, error) {
+	where := "WHERE 1=1"
+	args := []any{}
+	if q.ProcessInstanceID != "" {
+		where += " AND process_instance_id = ?"
+		args = append(args, q.ProcessInstanceID)
+	}
+	if q.ActivityID != "" {
+		where += " AND activity_id = ?"
+		args = append(args, q.ActivityID)
+	}
+	if q.Assignee != "" {
+		where += " AND json_extract(variables, '$.assignee') = ?"
+		args = append(args, q.Assignee)
+	}
+	if q.CompletedAfter != nil {
+		where += " AND completed_at >= ?"
+		args = append(args, *q.CompletedAfter)
+	}
+	if q.CompletedBefore != nil {
+		where += " AND completed_at <= ?"
+		args = append(args, *q.CompletedBefore)
+	}
+
+	var total int
+	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM historic_activity_instances "+where, args...).Scan(&total)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	if total == 0 {
+		return []*instance.HistoricActivityInstance{}, 0, nil
+	}
+
+	dataArgs := make([]any, len(args))
+	copy(dataArgs, args)
+	dataArgs = append(dataArgs, q.Limit, q.Offset)
+	rows, err := s.db.QueryContext(ctx,
+		"SELECT id, process_instance_id, activity_id, activity_type, variables, started_at, completed_at FROM historic_activity_instances "+where+" ORDER BY completed_at DESC LIMIT ? OFFSET ?",
+		dataArgs...)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+
+	var result []*instance.HistoricActivityInstance
+	for rows.Next() {
+		var id, piID, actID, actType, varsStr string
+		var startedAt, completedAt time.Time
+		if err := rows.Scan(&id, &piID, &actID, &actType, &varsStr, &startedAt, &completedAt); err != nil {
+			return nil, 0, err
+		}
+		vars := make(map[string]any)
+		if varsStr != "" {
+			json.Unmarshal([]byte(varsStr), &vars)
+		}
+		result = append(result, &instance.HistoricActivityInstance{
+			ID: id, ProcessInstanceID: piID, ActivityID: actID,
+			ActivityType: spec.ElementType(actType), Variables: vars,
+			StartedAt: startedAt, CompletedAt: completedAt,
+		})
+	}
+	return result, total, rows.Err()
+}
+
 // --- TimerJobStore ---
 
 func (s *Store) CreateTimerJob(ctx context.Context, job *instance.TimerJob) error {

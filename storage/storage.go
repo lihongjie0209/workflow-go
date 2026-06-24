@@ -36,6 +36,7 @@ type Store interface {
 	TimerJobStore
 	SignalSubscriptionStore
 	HistoricActivityInstanceStore
+	QueryStore
 	io.Closer
 }
 
@@ -66,6 +67,60 @@ type ActivityInstanceStore interface {
 	ListActiveActivities(ctx context.Context, processInstanceID string) ([]*instance.ActivityInstance, error)
 	ListActivitiesByProcessInstance(ctx context.Context, processInstanceID string) ([]*instance.ActivityInstance, error)
 	ListActivitiesByLoopID(ctx context.Context, processInstanceID, loopID string) ([]*instance.ActivityInstance, error)
+}
+
+// DefQuery 流程定义查询参数
+type DefQuery struct {
+	Key     string // 精确匹配
+	Name    string // 模糊匹配(包含)
+	Version int    // 精确匹配
+	Offset  int
+	Limit   int
+}
+
+// InstQuery 流程实例查询参数
+type InstQuery struct {
+	DefID      string
+	State      string            // running/completed/terminated/rejected
+	DefKey     string
+	Assignee   string
+	Initiator  string
+	StartAfter  *time.Time
+	StartBefore *time.Time
+	Offset     int
+	Limit      int
+}
+
+// ActQuery 活动查询参数
+type ActQuery struct {
+	ProcessInstanceID string
+	Assignee          string
+	ActivityID        string
+	ActivityType      string
+	State             string // active/completed
+	IsSign            *bool
+	Offset            int
+	Limit             int
+}
+
+// HistQuery 历史活动查询参数
+type HistQuery struct {
+	ProcessInstanceID string
+	ActivityID        string
+	Assignee          string
+	CompletedAfter    *time.Time
+	CompletedBefore   *time.Time
+	Offset            int
+	Limit             int
+}
+
+// QueryStore provides filtered + paginated read operations.
+// Each method returns (results, totalCount, error).
+type QueryStore interface {
+	QueryDefinitions(ctx context.Context, q DefQuery) ([]*spec.ProcessDefinition, int, error)
+	QueryProcessInstances(ctx context.Context, q InstQuery) ([]*instance.ProcessInstance, int, error)
+	QueryActivities(ctx context.Context, q ActQuery) ([]*instance.ActivityInstance, int, error)
+	QueryHistoricActivities(ctx context.Context, q HistQuery) ([]*instance.HistoricActivityInstance, int, error)
 }
 
 // HistoricActivityInstanceStore manages historical (completed) activity records.
