@@ -315,8 +315,8 @@ func (s *Store) CreateActivityInstance(ctx context.Context, ai *instance.Activit
 
 func (s *Store) UpdateActivityInstance(ctx context.Context, ai *instance.ActivityInstance) error {
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE activity_instances SET state = ?, claim_time = ?, completed_time = ?, multi_instance_loop = ?, loop_counter = ? WHERE id = ?`,
-		string(ai.State), ai.ClaimTime, ai.CompletedTime, ai.MultiInstanceLoopID, ai.LoopCounter, ai.ID)
+		`UPDATE activity_instances SET state = ?, assignee = ?, claim_time = ?, completed_time = ?, multi_instance_loop = ?, loop_counter = ? WHERE id = ?`,
+		string(ai.State), ai.Assignee, ai.ClaimTime, ai.CompletedTime, ai.MultiInstanceLoopID, ai.LoopCounter, ai.ID)
 	if err != nil {
 		return err
 	}

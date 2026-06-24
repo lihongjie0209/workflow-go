@@ -254,6 +254,50 @@ func (e *ProcessEngine) TerminateProcessInstance(ctx context.Context, processIns
 	return e.store.UpdateProcessInstance(ctx, pi)
 }
 
+
+
+// TransferTask 转办: 将当前活动转交新审批人。
+func (e *ProcessEngine) TransferTask(ctx context.Context, activityInstanceID, newAssignee string) error {
+	ai, err := e.store.GetActivityInstance(ctx, activityInstanceID)
+	if err != nil { return fmt.Errorf("engine: get activity %q: %w", activityInstanceID, err) }
+	if ai.State != instance.ActivityStateActive { return fmt.Errorf("engine: activity %q is not active", activityInstanceID) }
+	if ai.ActivityType != spec.ElementTypeUserTask { return fmt.Errorf("engine: activity %q is not a userTask", activityInstanceID) }
+	_ = e.store.SetVariable(ctx, ai.ProcessInstanceID, "__transfer_"+ai.ID, ai.Assignee+"->"+newAssignee)
+	ai.Assignee = newAssignee
+	return e.store.UpdateActivityInstance(ctx, ai)
+}
+
+// RemoveSign 减签: 移除当前活动的指定加签人。
+func (e *ProcessEngine) RemoveSign(ctx context.Context, activityInstanceID, assignee string) error {
+	parentAI, err := e.store.GetActivityInstance(ctx, activityInstanceID)
+	if err != nil { return fmt.Errorf("engine: get activity %q: %w", activityInstanceID, err) }
+	if parentAI.State != instance.ActivityStateActive { return fmt.Errorf("engine: activity %q is not active", activityInstanceID) }
+	pi, _ := e.store.GetProcessInstance(ctx, parentAI.ProcessInstanceID)
+	vars, _ := e.store.GetAllVariables(ctx, pi.ID)
+	signID := findSignID(vars, parentAI.ID)
+	allActs, _ := e.store.ListActivitiesByProcessInstance(ctx, pi.ID)
+	var found *instance.ActivityInstance
+	for _, a := range allActs {
+		if a.AdhocParentID == parentAI.ID && a.Assignee == assignee && a.State == instance.ActivityStateActive { found = a; break }
+	}
+	if found == nil { return fmt.Errorf("engine: no active sign for %q", assignee) }
+	found.Complete()
+	e.store.UpdateActivityInstance(ctx, found)
+	tokens, _ := e.store.ListActiveTokens(ctx, pi.ID)
+	for _, tok := range tokens {
+		if tok.CurrentElementID == parentAI.ActivityID && tok.State == instance.TokenStateActive {
+			tok.State = instance.TokenStateConsumed
+			e.store.UpdateToken(ctx, tok)
+			break
+		}
+	}
+	if signID != "" {
+		nrCompleted, _ := vars[signID+"_completed"].(float64)
+		e.store.SetVariable(ctx, pi.ID, signID+"_completed", nrCompleted+1)
+	}
+	return nil
+}
+
 func (e *ProcessEngine) ReceiveSignal(ctx context.Context, signalRef string, variables map[string]any) error {
 	n := &navigator{store: e.store}
 	if err := n.fireSignal(ctx, signalRef, variables); err != nil {
