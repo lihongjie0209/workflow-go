@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lihongjie/workflow-go/identity"
 	"github.com/lihongjie/workflow-go/instance"
 	"github.com/lihongjie/workflow-go/spec"
 	"github.com/lihongjie/workflow-go/storage"
@@ -13,7 +14,8 @@ import (
 // navigator handles the process execution flow, moving tokens
 // from one element to the next based on the process topology.
 type navigator struct {
-	store storage.Store
+	store    storage.Store
+	identity identity.Service
 }
 
 // startFrom begins execution from the start event of a process definition.
@@ -189,9 +191,16 @@ func (n *navigator) takeSequenceFlow(ctx context.Context, def *spec.ProcessDefin
 		ai := instance.NewActivityInstance(newID(), pi.ID, targetElement.GetID(), spec.ElementTypeUserTask)
 		if ut, ok := targetElement.(*spec.UserTask); ok {
 			vars, _ := n.store.GetAllVariables(ctx, pi.ID)
-			// Support both pure expression ${manager} and inline template hr_${dept}
-			ai.Assignee = RenderTemplate(ut.Assignee, vars)
-		}
+			if ut.Assignee != "" {
+				ai.Assignee = RenderTemplate(ut.Assignee, vars)
+			} else if len(ut.CandidateUsers) > 0 || ut.CandidateGroup != "" {
+				candidates := n.resolveCandidates(ctx, ut.CandidateUsers, ut.CandidateGroup)
+				if len(candidates) > 0 {
+					ai.State = instance.ActivityStateUnclaimed
+					_ = n.store.SetVariable(ctx, pi.ID, "__candidates_"+ai.ID, candidates)
+				}
+			}
+			}
 		if err := n.store.CreateActivityInstance(ctx, ai); err != nil {
 			return err
 		}
@@ -289,4 +298,16 @@ func (n *navigator) checkComplete(ctx context.Context, pi *instance.ProcessInsta
 		return n.checkParentCompletion(ctx, pi)
 	}
 	return nil
+}
+
+// resolveCandidates resolves candidate users from explicit list and group membership.
+func (n *navigator) resolveCandidates(ctx context.Context, candidateUsers []string, candidateGroup string) []string {
+	if n.identity == nil {
+		return nil
+	}
+	result, err := n.identity.ResolveCandidateUsers(ctx, candidateUsers, candidateGroup)
+	if err != nil {
+		return nil
+	}
+	return result
 }

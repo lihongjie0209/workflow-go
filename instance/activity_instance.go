@@ -11,6 +11,7 @@ type ActivityInstanceState string
 
 const (
 	ActivityStateActive    ActivityInstanceState = "active"
+	ActivityStateUnclaimed ActivityInstanceState = "unclaimed"
 	ActivityStateCompleted ActivityInstanceState = "completed"
 )
 

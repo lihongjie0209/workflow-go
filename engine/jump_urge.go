@@ -99,7 +99,7 @@ func (e *ProcessEngine) JumpTask(ctx context.Context, activityInstanceID, target
 	// If jumping to EndEvent, just let checkComplete handle it
 	if targetEl.GetType() == spec.ElementTypeEndEvent {
 		// Consume the token and check completion
-		n := &navigator{store: e.store}
+		n := &navigator{store: e.store, identity: e.identity}
 		return n.navigateFrom(ctx, pi.ID, targetNodeID)
 	}
 

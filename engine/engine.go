@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/lihongjie/workflow-go/identity"
 	"github.com/lihongjie/workflow-go/instance"
 	"github.com/lihongjie/workflow-go/spec"
 	"github.com/lihongjie/workflow-go/storage"
@@ -19,8 +20,15 @@ var varPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
 
 type ProcessEngine struct {
 	store              storage.Store
+	identity           identity.Service
 	executionListeners []ExecutionListener
 	taskListeners      []TaskListener
+}
+
+func WithIdentityService(svc identity.Service) EngineOption {
+	return func(e *ProcessEngine) {
+		e.identity = svc
+	}
 }
 
 func NewProcessEngine(store storage.Store, opts ...EngineOption) *ProcessEngine {
@@ -51,7 +59,7 @@ func (e *ProcessEngine) StartProcessInstance(ctx context.Context, defID string, 
 			return nil, fmt.Errorf("engine: set variable %q: %w", k, err)
 		}
 	}
-	n := &navigator{store: e.store}
+	n := &navigator{store: e.store, identity: e.identity}
 	if err := n.startFrom(ctx, def, pi); err != nil {
 		return nil, fmt.Errorf("engine: navigate from start: %w", err)
 	}
@@ -64,6 +72,9 @@ func (e *ProcessEngine) CompleteTask(ctx context.Context, activityInstanceID str
 		return fmt.Errorf("engine: get activity instance %q: %w", activityInstanceID, err)
 	}
 	if ai.State != instance.ActivityStateActive {
+		if ai.State == instance.ActivityStateUnclaimed {
+			return fmt.Errorf("engine: activity %q is unclaimed, must be claimed before completion", activityInstanceID)
+		}
 		return fmt.Errorf("engine: activity %q is not active, current state: %s", activityInstanceID, ai.State)
 	}
 	if ai.ActivityType != spec.ElementTypeUserTask {
@@ -95,7 +106,7 @@ func (e *ProcessEngine) CompleteTask(ctx context.Context, activityInstanceID str
 		}
 	}
 
-	n := &navigator{store: e.store}
+	n := &navigator{store: e.store, identity: e.identity}
 
 	// 加签
 	if ai.AdhocParentID != "" {
@@ -322,8 +333,87 @@ func (e *ProcessEngine) RemoveSign(ctx context.Context, activityInstanceID, assi
 	return nil
 }
 
+// ClaimTask 签收: 用户签收候选人任务，成为指定审批人。
+func (e *ProcessEngine) ClaimTask(ctx context.Context, activityInstanceID, userID string) error {
+	ai, err := e.store.GetActivityInstance(ctx, activityInstanceID)
+	if err != nil {
+		return fmt.Errorf("engine: get activity %q: %w", activityInstanceID, err)
+	}
+	if ai.State != instance.ActivityStateUnclaimed {
+		return fmt.Errorf("engine: activity %q is not unclaimed, current state: %s", activityInstanceID, ai.State)
+	}
+	if ai.ActivityType != spec.ElementTypeUserTask {
+		return fmt.Errorf("engine: activity %q is not a userTask", activityInstanceID)
+	}
+	// Verify user is a candidate if identity service is configured
+	candidates := e.GetCandidates(ctx, activityInstanceID)
+	if len(candidates) > 0 {
+		found := false
+		for _, c := range candidates {
+			if c == userID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("engine: user %q is not a candidate for activity %q", userID, activityInstanceID)
+		}
+	}
+	now := time.Now()
+	ai.Assignee = userID
+	ai.ClaimTime = &now
+	ai.State = instance.ActivityStateActive
+	return e.store.UpdateActivityInstance(ctx, ai)
+}
+
+// UnclaimTask 归还: 签收人归还任务，回到候选人池。
+func (e *ProcessEngine) UnclaimTask(ctx context.Context, activityInstanceID string) error {
+	ai, err := e.store.GetActivityInstance(ctx, activityInstanceID)
+	if err != nil {
+		return fmt.Errorf("engine: get activity %q: %w", activityInstanceID, err)
+	}
+	if ai.State != instance.ActivityStateActive {
+		return fmt.Errorf("engine: activity %q is not claimed, current state: %s", activityInstanceID, ai.State)
+	}
+	// Only allow unclaim if this task has candidates (was created as unclaimed)
+	candidates := e.GetCandidates(ctx, activityInstanceID)
+	if len(candidates) == 0 {
+		return fmt.Errorf("engine: activity %q has no candidates, cannot unclaim", activityInstanceID)
+	}
+	ai.Assignee = ""
+	ai.ClaimTime = nil
+	ai.State = instance.ActivityStateUnclaimed
+	return e.store.UpdateActivityInstance(ctx, ai)
+}
+
+// GetCandidates returns the list of candidate user IDs for an activity.
+func (e *ProcessEngine) GetCandidates(ctx context.Context, activityInstanceID string) []string {
+	ai, err := e.store.GetActivityInstance(ctx, activityInstanceID)
+	if err != nil {
+		return nil
+	}
+	raw, err := e.store.GetVariable(ctx, ai.ProcessInstanceID, "__candidates_"+ai.ID)
+	if err != nil {
+		return nil
+	}
+	switch v := raw.(type) {
+	case []string:
+		return v
+	case []any:
+		result := make([]string, 0, len(v))
+		for _, c := range v {
+			if s, ok := c.(string); ok {
+				result = append(result, s)
+			}
+		}
+		return result
+	default:
+		return nil
+	}
+}
+
 func (e *ProcessEngine) ReceiveSignal(ctx context.Context, signalRef string, variables map[string]any) error {
-	n := &navigator{store: e.store}
+	n := &navigator{store: e.store, identity: e.identity}
 	if err := n.fireSignal(ctx, signalRef, variables); err != nil {
 		return fmt.Errorf("engine: receive signal %q: %w", signalRef, err)
 	}

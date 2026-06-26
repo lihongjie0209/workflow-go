@@ -40,6 +40,14 @@ func (w *workflowEngineImpl) CompleteTask(ctx context.Context, activityInstanceI
 	return w.eng.CompleteTask(ctx, activityInstanceID, variables)
 }
 
+func (w *workflowEngineImpl) ClaimTask(ctx context.Context, activityInstanceID, userID string) error {
+	return w.eng.ClaimTask(ctx, activityInstanceID, userID)
+}
+
+func (w *workflowEngineImpl) UnclaimTask(ctx context.Context, activityInstanceID string) error {
+	return w.eng.UnclaimTask(ctx, activityInstanceID)
+}
+
 func (w *workflowEngineImpl) TransferTask(ctx context.Context, activityInstanceID, newAssignee string) error {
 	return w.eng.TransferTask(ctx, activityInstanceID, newAssignee)
 }

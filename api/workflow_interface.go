@@ -143,6 +143,8 @@ type WorkflowEngine interface {
 
 	// --- 任务操作 ---
 	CompleteTask(ctx context.Context, activityInstanceID string, variables map[string]any) error
+	ClaimTask(ctx context.Context, activityInstanceID, userID string) error
+	UnclaimTask(ctx context.Context, activityInstanceID string) error
 	TransferTask(ctx context.Context, activityInstanceID, newAssignee string) error
 	DelegateTask(ctx context.Context, activityInstanceID, delegateAssignee string) error
 	ReclaimTask(ctx context.Context, currentActivityID string) error

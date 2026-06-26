@@ -72,6 +72,7 @@ func (q *queryServiceImpl) ListPendingActivities(ctx context.Context, filter Act
 }
 
 func (q *queryServiceImpl) ListMyPendingActivities(ctx context.Context, assignee string, page PageRequest) (Page[*instance.ActivityInstance], error) {
+	// Query tasks assigned to this user
 	results, total, err := q.store.QueryActivities(ctx, storage.ActQuery{
 		Assignee: assignee,
 		State:    string(instance.ActivityStateActive),
@@ -81,7 +82,55 @@ func (q *queryServiceImpl) ListMyPendingActivities(ctx context.Context, assignee
 	if err != nil {
 		return Page[*instance.ActivityInstance]{}, err
 	}
+
+	// Also query unclaimed tasks where user is a candidate
+	unclaimed, _, err := q.store.QueryActivities(ctx, storage.ActQuery{
+		State:  string(instance.ActivityStateUnclaimed),
+		Offset: 0,
+		Limit:  9999,
+	})
+	if err == nil {
+		for _, a := range unclaimed {
+			candidates := q.getActivityCandidates(ctx, a)
+			for _, c := range candidates {
+				if c == assignee {
+					results = append(results, a)
+					total++
+					break
+				}
+			}
+		}
+	}
+
+	// Re-apply pagination on merged results
+	if len(results) > page.Limit() {
+		end := page.Offset() + page.Limit()
+		if end > len(results) {
+			end = len(results)
+		}
+		if page.Offset() < len(results) {
+			results = results[page.Offset():end]
+		}
+	}
 	return NewPage(results, total, page.Page, page.Limit()), nil
+}
+
+func (q *queryServiceImpl) getActivityCandidates(ctx context.Context, a *instance.ActivityInstance) []string {
+	raw, err := q.store.GetVariable(ctx, a.ProcessInstanceID, "__candidates_"+a.ID)
+	if err != nil {
+		return nil
+	}
+	list, ok := raw.([]any)
+	if !ok {
+		return nil
+	}
+	var result []string
+	for _, item := range list {
+		if s, ok := item.(string); ok {
+			result = append(result, s)
+		}
+	}
+	return result
 }
 
 func (q *queryServiceImpl) ListActivitiesByProcess(ctx context.Context, processInstanceID string, filter ActivityFilter, page PageRequest) (Page[*instance.ActivityInstance], error) {
