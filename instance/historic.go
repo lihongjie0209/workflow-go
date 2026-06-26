@@ -11,6 +11,7 @@ import (
 type HistoricActivityInstance struct {
 	ID                string
 	ProcessInstanceID string
+	TenantID          string
 	ActivityID        string
 	ActivityType      spec.ElementType
 	Variables         map[string]any

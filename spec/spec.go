@@ -40,6 +40,7 @@ type ProcessDefinition struct {
 	Name     string `json:"name,omitempty"`
 	Key      string `json:"key,omitempty"`
 	Version  int    `json:"version"`
+	TenantID string `json:"tenantId,omitempty"`
 	Elements map[string]FlowElement `json:"-"` // custom JSON below
 
 	SequenceFlows []*SequenceFlow `json:"sequenceFlows,omitempty"`

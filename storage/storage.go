@@ -71,11 +71,12 @@ type ActivityInstanceStore interface {
 
 // DefQuery 流程定义查询参数
 type DefQuery struct {
-	Key     string // 精确匹配
-	Name    string // 模糊匹配(包含)
-	Version int    // 精确匹配
-	Offset  int
-	Limit   int
+	Key      string // 精确匹配
+	Name     string // 模糊匹配(包含)
+	Version  int    // 精确匹配
+	TenantID string
+	Offset   int
+	Limit    int
 }
 
 // InstQuery 流程实例查询参数
@@ -86,6 +87,7 @@ type InstQuery struct {
 	Assignee   string
 	Initiator  string
 	BusinessKey string
+	TenantID   string
 	StartAfter  *time.Time
 	StartBefore *time.Time
 	Offset     int
@@ -100,6 +102,7 @@ type ActQuery struct {
 	ActivityType      string
 	State             string // active/completed
 	IsSign            *bool
+	TenantID          string
 	Offset            int
 	Limit             int
 }
@@ -109,6 +112,7 @@ type HistQuery struct {
 	ProcessInstanceID string
 	ActivityID        string
 	Assignee          string
+	TenantID          string
 	CompletedAfter    *time.Time
 	CompletedBefore   *time.Time
 	Offset            int

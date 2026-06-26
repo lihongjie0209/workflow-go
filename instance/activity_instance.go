@@ -25,6 +25,7 @@ const (
 type ActivityInstance struct {
 	ID                  string
 	ProcessInstanceID   string
+	TenantID            string `json:"tenantID,omitempty"`
 	ActivityID          string
 	ActivityType        spec.ElementType
 	State               ActivityInstanceState

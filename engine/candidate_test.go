@@ -475,7 +475,7 @@ func TestBusinessKey_StartAndQuery(t *testing.T) {
 	s.CreateProcessDefinition(ctx, def)
 
 	// Start with business key
-	pi, err := e.StartProcessInstanceWithBusinessKey(ctx, "bk1", "ORDER-001", map[string]any{"amount": 100})
+	pi, err := e.StartProcessInstanceWithBusinessKey(ctx, "bk1", "ORDER-001", "", map[string]any{"amount": 100})
 	if err != nil {
 		t.Fatalf("StartProcessInstanceWithBusinessKey: %v", err)
 	}
@@ -496,7 +496,7 @@ func TestBusinessKey_StartAndQuery(t *testing.T) {
 	}
 
 	// StartProcessInstanceByKey
-	pi2, err := e.StartProcessInstanceByKey(ctx, "leave", "ORDER-002", nil)
+	pi2, err := e.StartProcessInstanceByKey(ctx, "leave", "ORDER-002", "", nil)
 	if err != nil {
 		t.Fatalf("StartProcessInstanceByKey: %v", err)
 	}
@@ -538,7 +538,7 @@ func TestBusinessKey_WithSqlStore(t *testing.T) {
 	}
 	s.CreateProcessDefinition(ctx, def)
 
-	pi, err := e.StartProcessInstanceWithBusinessKey(ctx, "bk_sql", "BIZ-999", nil)
+	pi, err := e.StartProcessInstanceWithBusinessKey(ctx, "bk_sql", "BIZ-999", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

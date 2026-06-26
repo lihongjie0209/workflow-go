@@ -25,6 +25,7 @@ func (q *queryServiceImpl) ListInstances(ctx context.Context, filter ProcessInst
 		State:       filter.State,
 		DefKey:      filter.DefKey,
 		BusinessKey: filter.BusinessKey,
+			TenantID: filter.TenantID,
 		Initiator:   filter.Initiator,
 		StartAfter:  filter.StartAfter,
 		StartBefore: filter.StartBefore,
@@ -59,6 +60,7 @@ func (q *queryServiceImpl) ListPendingActivities(ctx context.Context, filter Act
 	results, total, err := q.store.QueryActivities(ctx, storage.ActQuery{
 		ProcessInstanceID: filter.ProcessInstanceID,
 		Assignee:          filter.Assignee,
+			TenantID:          filter.TenantID,
 		ActivityID:        filter.ActivityID,
 		ActivityType:      filter.ActivityType,
 		State:             string(instance.ActivityStateActive),
@@ -138,6 +140,7 @@ func (q *queryServiceImpl) ListActivitiesByProcess(ctx context.Context, processI
 	results, total, err := q.store.QueryActivities(ctx, storage.ActQuery{
 		ProcessInstanceID: processInstanceID,
 		Assignee:          filter.Assignee,
+			TenantID:          filter.TenantID,
 		ActivityID:        filter.ActivityID,
 		ActivityType:      filter.ActivityType,
 		State:             filter.State,
@@ -159,6 +162,7 @@ func (q *queryServiceImpl) ListHistoryByProcess(ctx context.Context, filter Hist
 		ProcessInstanceID: filter.ProcessInstanceID,
 		ActivityID:        filter.ActivityID,
 		Assignee:          filter.Assignee,
+			TenantID:          filter.TenantID,
 		CompletedAfter:    filter.CompletedAfter,
 		CompletedBefore:   filter.CompletedBefore,
 		Offset:            page.Offset(),

@@ -24,6 +24,7 @@ func (n *navigator) startFrom(ctx context.Context, def *spec.ProcessDefinition, 
 
 	// Create activity instance for StartEvent (completes instantly).
 	ai := instance.NewActivityInstance(newID(), pi.ID, startID, spec.ElementTypeStartEvent)
+	ai.TenantID = pi.TenantID
 	ai.Complete()
 	if err := n.store.CreateActivityInstance(ctx, ai); err != nil {
 		return err
@@ -185,10 +186,12 @@ func (n *navigator) takeSequenceFlow(ctx context.Context, def *spec.ProcessDefin
 			return n.handleMultiInstanceTask(ctx, def, pi, ut)
 		}
 		tok := instance.NewToken(newID(), pi.ID, targetElement.GetID())
+	tok.TenantID = pi.TenantID
 		if err := n.store.CreateToken(ctx, tok); err != nil {
 			return err
 		}
 		ai := instance.NewActivityInstance(newID(), pi.ID, targetElement.GetID(), spec.ElementTypeUserTask)
+	ai.TenantID = pi.TenantID
 		if ut, ok := targetElement.(*spec.UserTask); ok {
 			vars, _ := n.store.GetAllVariables(ctx, pi.ID)
 			if ut.Assignee != "" {
@@ -212,10 +215,12 @@ func (n *navigator) takeSequenceFlow(ctx context.Context, def *spec.ProcessDefin
 
 	case spec.ElementTypeServiceTask:
 		tok := instance.NewToken(newID(), pi.ID, targetElement.GetID())
+	tok.TenantID = pi.TenantID
 		if err := n.store.CreateToken(ctx, tok); err != nil {
 			return err
 		}
 		ai := instance.NewActivityInstance(newID(), pi.ID, targetElement.GetID(), spec.ElementTypeServiceTask)
+	ai.TenantID = pi.TenantID
 		ai.Complete()
 		if err := n.store.CreateActivityInstance(ctx, ai); err != nil {
 			return err
@@ -228,6 +233,7 @@ func (n *navigator) takeSequenceFlow(ctx context.Context, def *spec.ProcessDefin
 
 	case spec.ElementTypeEndEvent:
 		ai := instance.NewActivityInstance(newID(), pi.ID, targetElement.GetID(), spec.ElementTypeEndEvent)
+	ai.TenantID = pi.TenantID
 		ai.Complete()
 		if err := n.store.CreateActivityInstance(ctx, ai); err != nil {
 			return err
@@ -236,6 +242,7 @@ func (n *navigator) takeSequenceFlow(ctx context.Context, def *spec.ProcessDefin
 
 	case spec.ElementTypeExclusiveGateway, spec.ElementTypeParallelGateway, spec.ElementTypeInclusiveGateway:
 		tok := instance.NewToken(newID(), pi.ID, targetElement.GetID())
+	tok.TenantID = pi.TenantID
 		if err := n.store.CreateToken(ctx, tok); err != nil {
 			return err
 		}

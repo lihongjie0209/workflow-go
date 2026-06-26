@@ -71,6 +71,7 @@ type ProcessInstanceFilter struct {
 	DefKey      string    `json:"defKey,omitempty"`      // 流程定义 Key
 	DefID       string    `json:"defId,omitempty"`       // 流程定义 ID
 	BusinessKey string    `json:"businessKey,omitempty"` // 业务 Key
+	TenantID    string    `json:"tenantId,omitempty"`    // 租户 ID
 	State       string    `json:"state,omitempty"`       // 状态: running/suspended/completed/terminated/rejected
 	Assignee    string    `json:"assignee,omitempty"`    // 当前处理人
 	Initiator   string    `json:"initiator,omitempty"`   // 发起人(从变量中匹配)
@@ -87,6 +88,7 @@ type ActivityFilter struct {
 	ActivityType      string `json:"activityType,omitempty"`     // 节点类型
 	State             string `json:"state,omitempty"`            // 状态: active/completed
 	IsSign            *bool  `json:"isSign,omitempty"`           // 是否加签活动
+	TenantID          string `json:"tenantId,omitempty"`         // 租户 ID
 }
 
 // HistoryFilter 历史记录过滤条件
@@ -97,13 +99,15 @@ type HistoryFilter struct {
 	CompletedAfter    *time.Time `json:"completedAfter,omitempty"`
 	CompletedBefore   *time.Time `json:"completedBefore,omitempty"`
 	Assignee          string    `json:"assignee,omitempty"`
+	TenantID          string    `json:"tenantId,omitempty"`
 }
 
 // DefinitionFilter 流程定义过滤条件
 type DefinitionFilter struct {
-	Key     string `json:"key,omitempty"`     // 定义 Key
-	Name    string `json:"name,omitempty"`    // 定义名称(模糊匹配)
-	Version int    `json:"version,omitempty"` // 版本号
+	Key      string `json:"key,omitempty"`      // 定义 Key
+	Name     string `json:"name,omitempty"`     // 定义名称(模糊匹配)
+	Version  int    `json:"version,omitempty"`  // 版本号
+	TenantID string `json:"tenantId,omitempty"` // 租户 ID
 }
 
 // ============================================================

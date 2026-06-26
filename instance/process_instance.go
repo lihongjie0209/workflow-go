@@ -20,6 +20,7 @@ const (
 type ProcessInstance struct {
 	ID                  string
 	ProcessDefinitionID string
+	TenantID            string // tenant isolation
 	BusinessKey         string // external business identifier (e.g. order ID, ticket number)
 	State               ProcessInstanceState
 	Variables           map[string]any

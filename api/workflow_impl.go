@@ -25,7 +25,7 @@ func (w *workflowEngineImpl) StartProcessInstance(ctx context.Context, defID str
 }
 
 func (w *workflowEngineImpl) StartProcessInstanceByKey(ctx context.Context, key, businessKey string, variables map[string]any) (*instance.ProcessInstance, error) {
-	return w.eng.StartProcessInstanceByKey(ctx, key, businessKey, variables)
+	return w.eng.StartProcessInstanceByKey(ctx, key, businessKey, "", variables)
 }
 
 func (w *workflowEngineImpl) SuspendProcessInstance(ctx context.Context, processInstanceID string) error {

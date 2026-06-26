@@ -83,6 +83,7 @@ func (s *Store) init() error {
 		id TEXT PRIMARY KEY,
 		def_id TEXT NOT NULL,
 		business_key TEXT NOT NULL DEFAULT '',
+		tenant_id TEXT NOT NULL DEFAULT '',
 		state TEXT NOT NULL DEFAULT 'running',
 		variables TEXT NOT NULL DEFAULT '{}',
 		started_at TIMESTAMP NOT NULL,
@@ -94,6 +95,7 @@ func (s *Store) init() error {
 	CREATE TABLE IF NOT EXISTS activity_instances (
 		id TEXT PRIMARY KEY,
 		process_instance_id TEXT NOT NULL,
+		tenant_id TEXT NOT NULL DEFAULT '',
 		activity_id TEXT NOT NULL,
 		activity_type TEXT NOT NULL,
 		assignee TEXT NOT NULL DEFAULT '',
@@ -234,8 +236,8 @@ func (s *Store) CreateProcessInstance(ctx context.Context, pi *instance.ProcessI
 		return err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO process_instances (id, def_id, business_key, state, variables, started_at, parent_process_instance_id, parent_activity_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		pi.ID, pi.ProcessDefinitionID, pi.BusinessKey, string(pi.State), string(vars), pi.StartedAt, pi.ParentProcessInstanceID, pi.ParentActivityID)
+		`INSERT INTO process_instances (id, def_id, business_key, tenant_id, state, variables, started_at, parent_process_instance_id, parent_activity_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		pi.ID, pi.ProcessDefinitionID, pi.BusinessKey, pi.TenantID, string(pi.State), string(vars), pi.StartedAt, pi.ParentProcessInstanceID, pi.ParentActivityID)
 	if err != nil {
 		return fmt.Errorf("sqlstore: create instance %q: %w", pi.ID, err)
 	}
@@ -312,8 +314,8 @@ func (s *Store) ListProcessInstances(ctx context.Context, defID string) ([]*inst
 
 func (s *Store) CreateActivityInstance(ctx context.Context, ai *instance.ActivityInstance) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO activity_instances (id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, multi_instance_loop, loop_counter, expire_time, term_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		ai.ID, ai.ProcessInstanceID, ai.ActivityID, string(ai.ActivityType), ai.Assignee, ai.AdhocParentID, string(ai.State), ai.MultiInstanceLoopID, ai.LoopCounter, ai.ExpireTime, ai.TermMode)
+		`INSERT INTO activity_instances (id, process_instance_id, tenant_id, activity_id, activity_type, assignee, adhoc_parent_id, state, multi_instance_loop, loop_counter, expire_time, term_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		ai.ID, ai.ProcessInstanceID, ai.TenantID, ai.ActivityID, string(ai.ActivityType), ai.Assignee, ai.AdhocParentID, string(ai.State), ai.MultiInstanceLoopID, ai.LoopCounter, ai.ExpireTime, ai.TermMode)
 	if err != nil {
 		return fmt.Errorf("sqlstore: create activity instance %q: %w", ai.ID, err)
 	}
@@ -730,6 +732,10 @@ func (s *Store) QueryDefinitions(ctx context.Context, q storage.DefQuery) ([]*sp
 		where += " AND version = ?"
 		args = append(args, q.Version)
 	}
+		if q.TenantID != "" {
+		where += " AND tenant_id = ?"
+		args = append(args, q.TenantID)
+	}
 	if q.Name != "" {
 		where += " AND name LIKE ?"
 		args = append(args, "%"+q.Name+"%")
@@ -783,6 +789,10 @@ func (s *Store) QueryProcessInstances(ctx context.Context, q storage.InstQuery) 
 	if q.DefKey != "" {
 		where += " AND def_id IN (SELECT id FROM process_definitions WHERE key = ?)"
 		args = append(args, q.DefKey)
+	}
+		if q.TenantID != "" {
+		where += " AND tenant_id = ?"
+		args = append(args, q.TenantID)
 	}
 	if q.Initiator != "" {
 		where += " AND json_extract(variables, '$.initiator') = ?"
@@ -848,6 +858,10 @@ func (s *Store) QueryActivities(ctx context.Context, q storage.ActQuery) ([]*ins
 		where += " AND state = ?"
 		args = append(args, q.State)
 	}
+		if q.TenantID != "" {
+		where += " AND tenant_id = ?"
+		args = append(args, q.TenantID)
+	}
 	if q.IsSign != nil {
 		if *q.IsSign {
 			where += " AND adhoc_parent_id != ''"
@@ -898,6 +912,10 @@ func (s *Store) QueryHistoricActivities(ctx context.Context, q storage.HistQuery
 	if q.Assignee != "" {
 		where += " AND json_extract(variables, '$.assignee') = ?"
 		args = append(args, q.Assignee)
+	}
+		if q.TenantID != "" {
+		where += " AND tenant_id = ?"
+		args = append(args, q.TenantID)
 	}
 	if q.CompletedAfter != nil {
 		where += " AND completed_at >= ?"

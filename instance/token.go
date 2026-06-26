@@ -17,6 +17,7 @@ const (
 type Token struct {
 	ID                string
 	ProcessInstanceID string
+	TenantID          string
 	CurrentElementID  string // the element this token currently occupies
 	State             TokenState
 	CreatedAt         time.Time
