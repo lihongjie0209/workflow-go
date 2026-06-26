@@ -454,6 +454,9 @@ func (s *Store) QueryProcessInstances(_ context.Context, q storage.InstQuery) ([
 				continue
 			}
 		}
+		if q.BusinessKey != "" && pi.BusinessKey != q.BusinessKey {
+				continue
+			}
 		if q.StartAfter != nil && pi.StartedAt.Before(*q.StartAfter) {
 			continue
 		}

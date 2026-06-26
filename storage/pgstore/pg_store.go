@@ -70,6 +70,7 @@ func (s *Store) init() error {
 	CREATE TABLE IF NOT EXISTS process_instances (
 		id TEXT PRIMARY KEY,
 		def_id TEXT NOT NULL,
+		business_key TEXT NOT NULL DEFAULT '',
 		state TEXT NOT NULL DEFAULT 'running',
 		variables JSONB NOT NULL DEFAULT '{}',
 		started_at TIMESTAMPTZ NOT NULL,
@@ -221,8 +222,8 @@ func (s *Store) CreateProcessInstance(ctx context.Context, pi *instance.ProcessI
 		return err
 	}
 	_, err = s.db.ExecContext(ctx,
-		`INSERT INTO process_instances (id, def_id, state, variables, started_at, parent_process_instance_id, parent_activity_id) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		pi.ID, pi.ProcessDefinitionID, string(pi.State), string(vars), pi.StartedAt, pi.ParentProcessInstanceID, pi.ParentActivityID)
+		`INSERT INTO process_instances (id, def_id, business_key, state, variables, started_at, parent_process_instance_id, parent_activity_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		pi.ID, pi.ProcessDefinitionID, pi.BusinessKey, string(pi.State), string(vars), pi.StartedAt, pi.ParentProcessInstanceID, pi.ParentActivityID)
 	if err != nil {
 		return fmt.Errorf("pgstore: create instance %q: %w", pi.ID, err)
 	}
@@ -249,13 +250,14 @@ func (s *Store) UpdateProcessInstance(ctx context.Context, pi *instance.ProcessI
 
 func (s *Store) GetProcessInstance(ctx context.Context, id string) (*instance.ProcessInstance, error) {
 	var (
+		businessKey				string
 		defID, stateStr, varsJSON, parentPIID, parentActID string
 		startedAt       time.Time
 		endedAt         *time.Time
 	)
 	err := s.db.QueryRowContext(ctx,
-		`SELECT def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances WHERE id = $1`, id).
-		Scan(&defID, &stateStr, &varsJSON, &startedAt, &endedAt, &parentPIID, &parentActID)
+		`SELECT business_key, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances WHERE id = $1`, id).
+		Scan(&businessKey, &defID, &stateStr, &varsJSON, &startedAt, &endedAt, &parentPIID, &parentActID)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("pgstore: process instance %q not found: %w", id, storage.ErrNotFound)
 	}
@@ -277,14 +279,15 @@ func (s *Store) GetProcessInstance(ctx context.Context, id string) (*instance.Pr
 		Variables:           vars,
 		StartedAt:           startedAt,
 		EndedAt:             endedAt,
-		ParentProcessInstanceID: parentPIID,
+		BusinessKey: businessKey,
+			ParentProcessInstanceID: parentPIID,
 		ParentActivityID:        parentActID,
 	}, nil
 }
 
 func (s *Store) ListProcessInstances(ctx context.Context, defID string) ([]*instance.ProcessInstance, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances WHERE def_id = $1`, defID)
+		`SELECT id, business_key, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances WHERE def_id = $1`, defID)
 	if err != nil {
 		return nil, err
 	}
@@ -591,7 +594,7 @@ func (s *Store) GetLatestProcessDefinitionByKey(ctx context.Context, key string)
 
 func (s *Store) ListCompletedProcessInstances(ctx context.Context, limit int) ([]*instance.ProcessInstance, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances WHERE state = 'completed' ORDER BY ended_at DESC LIMIT $1`, limit)
+		`SELECT id, business_key, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances WHERE state = 'completed' ORDER BY ended_at DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -776,7 +779,7 @@ func (s *Store) QueryProcessInstances(ctx context.Context, q storage.InstQuery) 
 	copy(dataArgs, args)
 	dataArgs = append(dataArgs, q.Limit, q.Offset)
 	rows, err := s.db.QueryContext(ctx,
-		fmt.Sprintf("SELECT id, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances %s ORDER BY started_at DESC LIMIT $%d OFFSET $%d", where, argIdx, argIdx+1),
+		fmt.Sprintf("SELECT id, business_key, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances %s ORDER BY started_at DESC LIMIT $%d OFFSET $%d", where, argIdx, argIdx+1),
 		dataArgs...)
 	if err != nil {
 		return nil, 0, err
@@ -932,11 +935,12 @@ func scanProcessInstances(rows *sql.Rows) ([]*instance.ProcessInstance, error) {
 	var result []*instance.ProcessInstance
 	for rows.Next() {
 		var (
+			businessKey                   string
 			id, defID, stateStr, varsJSON, parentPIID, parentActID string
 			startedAt                     time.Time
 			endedAt                       *time.Time
 		)
-		if err := rows.Scan(&id, &defID, &stateStr, &varsJSON, &startedAt, &endedAt, &parentPIID, &parentActID); err != nil {
+		if err := rows.Scan(&id, &businessKey, &defID, &stateStr, &varsJSON, &startedAt, &endedAt, &parentPIID, &parentActID); err != nil {
 			return nil, err
 		}
 		vars := make(map[string]any)
@@ -952,6 +956,7 @@ func scanProcessInstances(rows *sql.Rows) ([]*instance.ProcessInstance, error) {
 			Variables:           vars,
 			StartedAt:           startedAt,
 			EndedAt:             endedAt,
+			BusinessKey: businessKey,
 			ParentProcessInstanceID: parentPIID,
 			ParentActivityID:        parentActID,
 		})

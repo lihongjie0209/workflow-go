@@ -24,6 +24,7 @@ func (q *queryServiceImpl) ListInstances(ctx context.Context, filter ProcessInst
 		DefID:       filter.DefID,
 		State:       filter.State,
 		DefKey:      filter.DefKey,
+		BusinessKey: filter.BusinessKey,
 		Initiator:   filter.Initiator,
 		StartAfter:  filter.StartAfter,
 		StartBefore: filter.StartBefore,

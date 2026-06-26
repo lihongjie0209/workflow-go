@@ -85,6 +85,7 @@ type InstQuery struct {
 	DefKey     string
 	Assignee   string
 	Initiator  string
+	BusinessKey string
 	StartAfter  *time.Time
 	StartBefore *time.Time
 	Offset     int

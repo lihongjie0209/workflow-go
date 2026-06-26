@@ -40,6 +40,10 @@ func NewProcessEngine(store storage.Store, opts ...EngineOption) *ProcessEngine 
 }
 
 func (e *ProcessEngine) StartProcessInstance(ctx context.Context, defID string, variables map[string]any) (*instance.ProcessInstance, error) {
+	return e.StartProcessInstanceWithBusinessKey(ctx, defID, "", variables)
+}
+
+func (e *ProcessEngine) StartProcessInstanceWithBusinessKey(ctx context.Context, defID, businessKey string, variables map[string]any) (*instance.ProcessInstance, error) {
 	def, err := e.store.GetProcessDefinition(ctx, defID)
 	if err != nil {
 		return nil, fmt.Errorf("engine: get definition %q: %w", defID, err)
@@ -51,6 +55,7 @@ func (e *ProcessEngine) StartProcessInstance(ctx context.Context, defID string, 
 		variables = make(map[string]any)
 	}
 	pi := instance.NewProcessInstance(newID(), defID, variables)
+	pi.BusinessKey = businessKey
 	if err := e.store.CreateProcessInstance(ctx, pi); err != nil {
 		return nil, fmt.Errorf("engine: create instance: %w", err)
 	}
@@ -64,6 +69,16 @@ func (e *ProcessEngine) StartProcessInstance(ctx context.Context, defID string, 
 		return nil, fmt.Errorf("engine: navigate from start: %w", err)
 	}
 	return pi, nil
+}
+
+// StartProcessInstanceByKey starts a new process instance by looking up the
+// latest version of the process definition with the given key.
+func (e *ProcessEngine) StartProcessInstanceByKey(ctx context.Context, key, businessKey string, variables map[string]any) (*instance.ProcessInstance, error) {
+	def, err := e.store.GetLatestProcessDefinitionByKey(ctx, key)
+	if err != nil {
+		return nil, fmt.Errorf("engine: get definition by key %q: %w", key, err)
+	}
+	return e.StartProcessInstanceWithBusinessKey(ctx, def.ID, businessKey, variables)
 }
 
 func (e *ProcessEngine) CompleteTask(ctx context.Context, activityInstanceID string, variables map[string]any) error {

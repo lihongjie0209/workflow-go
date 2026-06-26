@@ -7,6 +7,7 @@ import (
 	"github.com/lihongjie/workflow-go/identity"
 	"github.com/lihongjie/workflow-go/instance"
 	"github.com/lihongjie/workflow-go/spec"
+	"github.com/lihongjie/workflow-go/storage"
 	"github.com/lihongjie/workflow-go/storage/memstore"
 	"github.com/lihongjie/workflow-go/storage/sqlstore"
 )
@@ -450,4 +451,110 @@ func findActivityByID(acts []*instance.ActivityInstance, activityID string) *ins
 		}
 	}
 	return nil
+}
+
+func TestBusinessKey_StartAndQuery(t *testing.T) {
+	ctx := context.Background()
+	s := memstore.New()
+	t.Cleanup(func() { s.Close() })
+	e := NewProcessEngine(s)
+
+	def := &spec.ProcessDefinition{
+		ID: "bk1", Key: "leave", Version: 1,
+		Elements: map[string]spec.FlowElement{
+			"start": &spec.StartEvent{ID: "start"},
+			"task":  &spec.UserTask{ID: "task", Name: "审批", Assignee: "张三"},
+			"end":   &spec.EndEvent{ID: "end"},
+		},
+		SequenceFlows: []*spec.SequenceFlow{
+			{ID: "s1", SourceRef: "start", TargetRef: "task"},
+			{ID: "s2", SourceRef: "task", TargetRef: "end"},
+		},
+		StartEventID: "start",
+	}
+	s.CreateProcessDefinition(ctx, def)
+
+	// Start with business key
+	pi, err := e.StartProcessInstanceWithBusinessKey(ctx, "bk1", "ORDER-001", map[string]any{"amount": 100})
+	if err != nil {
+		t.Fatalf("StartProcessInstanceWithBusinessKey: %v", err)
+	}
+	if pi.BusinessKey != "ORDER-001" {
+		t.Errorf("BusinessKey=%q, want ORDER-001", pi.BusinessKey)
+	}
+
+	// Query by business key
+	results, total, err := s.QueryProcessInstances(ctx, storage.InstQuery{BusinessKey: "ORDER-001"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(results) != 1 {
+		t.Errorf("expected 1 result, got total=%d len=%d", total, len(results))
+	}
+	if results[0].ID != pi.ID {
+		t.Errorf("ID mismatch: got %q, want %q", results[0].ID, pi.ID)
+	}
+
+	// StartProcessInstanceByKey
+	pi2, err := e.StartProcessInstanceByKey(ctx, "leave", "ORDER-002", nil)
+	if err != nil {
+		t.Fatalf("StartProcessInstanceByKey: %v", err)
+	}
+	if pi2.BusinessKey != "ORDER-002" {
+		t.Errorf("BusinessKey=%q, want ORDER-002", pi2.BusinessKey)
+	}
+	if pi2.ProcessDefinitionID != "bk1" {
+		t.Errorf("expected defID=bk1, got %q", pi2.ProcessDefinitionID)
+	}
+
+	// Backward compatible: StartProcessInstance without business key
+	pi3, err := e.StartProcessInstance(ctx, "bk1", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pi3.BusinessKey != "" {
+		t.Errorf("expected empty BusinessKey, got %q", pi3.BusinessKey)
+	}
+}
+
+func TestBusinessKey_WithSqlStore(t *testing.T) {
+	ctx := context.Background()
+	s := sqlstore.New(sqlstore.WithMemory())
+	t.Cleanup(func() { s.Close() })
+	e := NewProcessEngine(s)
+
+	def := &spec.ProcessDefinition{
+		ID: "bk_sql", Key: "bk_sql", Version: 1,
+		Elements: map[string]spec.FlowElement{
+			"start": &spec.StartEvent{ID: "start"},
+			"task":  &spec.UserTask{ID: "task", Name: "审批", Assignee: "张三"},
+			"end":   &spec.EndEvent{ID: "end"},
+		},
+		SequenceFlows: []*spec.SequenceFlow{
+			{ID: "s1", SourceRef: "start", TargetRef: "task"},
+			{ID: "s2", SourceRef: "task", TargetRef: "end"},
+		},
+		StartEventID: "start",
+	}
+	s.CreateProcessDefinition(ctx, def)
+
+	pi, err := e.StartProcessInstanceWithBusinessKey(ctx, "bk_sql", "BIZ-999", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pi.BusinessKey != "BIZ-999" {
+		t.Errorf("BusinessKey=%q, want BIZ-999", pi.BusinessKey)
+	}
+
+	// Verify via QueryStore
+	results, total, err := s.QueryProcessInstances(ctx, storage.InstQuery{BusinessKey: "BIZ-999", Limit: 100})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total != 1 || len(results) != 1 {
+		t.Errorf("expected 1, got total=%d len=%d", total, len(results))
+	}
+	if results[0].BusinessKey != "BIZ-999" {
+		t.Errorf("got BusinessKey=%q", results[0].BusinessKey)
+	}
 }

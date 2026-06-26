@@ -20,6 +20,7 @@ const (
 type ProcessInstance struct {
 	ID                  string
 	ProcessDefinitionID string
+	BusinessKey         string // external business identifier (e.g. order ID, ticket number)
 	State               ProcessInstanceState
 	Variables           map[string]any
 	StartedAt           time.Time

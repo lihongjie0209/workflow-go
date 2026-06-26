@@ -70,6 +70,7 @@ func (p PageRequest) Limit() int {
 type ProcessInstanceFilter struct {
 	DefKey      string    `json:"defKey,omitempty"`      // 流程定义 Key
 	DefID       string    `json:"defId,omitempty"`       // 流程定义 ID
+	BusinessKey string    `json:"businessKey,omitempty"` // 业务 Key
 	State       string    `json:"state,omitempty"`       // 状态: running/suspended/completed/terminated/rejected
 	Assignee    string    `json:"assignee,omitempty"`    // 当前处理人
 	Initiator   string    `json:"initiator,omitempty"`   // 发起人(从变量中匹配)
