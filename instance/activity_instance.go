@@ -35,6 +35,7 @@ type ActivityInstance struct {
 	MultiInstanceLoopID string `json:"multiInstanceLoopID,omitempty"`
 	LoopCounter         int    `json:"loopCounter,omitempty"`
 	AdhocParentID       string    `json:"adhocParentID,omitempty"` // 加签: 父活动实例ID
+	LockVersion         int       `json:"lockVersion,omitempty"`    // 乐观锁版本号
 	ExpireTime          *time.Time `json:"expireTime,omitempty"`  // 超时时间
 	TermMode            int        `json:"termMode,omitempty"`    // 超时模式: 0=无, 1=自动通过, 2=自动驳回
 }

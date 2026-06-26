@@ -10,6 +10,7 @@ import (
 
 	"github.com/lihongjie/workflow-go/identity"
 	"github.com/lihongjie/workflow-go/instance"
+	"github.com/lihongjie/workflow-go/lock"
 	"github.com/lihongjie/workflow-go/spec"
 	"github.com/lihongjie/workflow-go/storage"
 
@@ -21,6 +22,7 @@ var varPattern = regexp.MustCompile(`\$\{([^}]+)\}`)
 type ProcessEngine struct {
 	store              storage.Store
 	identity           identity.Service
+	locker             lock.Locker
 	executionListeners []ExecutionListener
 	taskListeners      []TaskListener
 }
@@ -31,12 +33,35 @@ func WithIdentityService(svc identity.Service) EngineOption {
 	}
 }
 
+func WithLocker(l lock.Locker) EngineOption {
+	return func(e *ProcessEngine) {
+		e.locker = l
+	}
+}
+
 func NewProcessEngine(store storage.Store, opts ...EngineOption) *ProcessEngine {
 	e := &ProcessEngine{store: store}
 	for _, opt := range opts {
 		opt(e)
 	}
 	return e
+}
+
+// RunInTransaction executes the given function within a transaction.
+func (e *ProcessEngine) RunInTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	return e.store.RunInTransaction(ctx, fn)
+}
+
+// runWithLock acquires the process instance lock (if locker is configured)
+// and executes the function within a transaction.
+func (e *ProcessEngine) runWithLock(ctx context.Context, piID string, fn func(ctx context.Context) error) error {
+	if e.locker != nil {
+		if err := e.locker.Lock(ctx, "pi:"+piID); err != nil {
+			return err
+		}
+		defer e.locker.Unlock(ctx, "pi:"+piID)
+	}
+	return e.RunInTransaction(ctx, fn)
 }
 
 func (e *ProcessEngine) StartProcessInstance(ctx context.Context, defID string, variables map[string]any) (*instance.ProcessInstance, error) {
@@ -57,17 +82,24 @@ func (e *ProcessEngine) StartProcessInstanceWithBusinessKey(ctx context.Context,
 	pi := instance.NewProcessInstance(newID(), defID, variables)
 	pi.BusinessKey = businessKey
 	pi.TenantID = tenantID
-	if err := e.store.CreateProcessInstance(ctx, pi); err != nil {
-		return nil, fmt.Errorf("engine: create instance: %w", err)
-	}
-	for k, v := range variables {
-		if err := e.store.SetVariable(ctx, pi.ID, k, v); err != nil {
-			return nil, fmt.Errorf("engine: set variable %q: %w", k, err)
+
+	// Wrap mutation in transaction
+	if err := e.RunInTransaction(ctx, func(txCtx context.Context) error {
+		if err := e.store.CreateProcessInstance(txCtx, pi); err != nil {
+			return fmt.Errorf("engine: create instance: %w", err)
 		}
-	}
-	n := &navigator{store: e.store, identity: e.identity}
-	if err := n.startFrom(ctx, def, pi); err != nil {
-		return nil, fmt.Errorf("engine: navigate from start: %w", err)
+		for k, v := range variables {
+			if err := e.store.SetVariable(txCtx, pi.ID, k, v); err != nil {
+				return fmt.Errorf("engine: set variable %q: %w", k, err)
+			}
+		}
+		n := &navigator{store: e.store, identity: e.identity}
+		if err := n.startFrom(txCtx, def, pi); err != nil {
+			return fmt.Errorf("engine: navigate from start: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	return pi, nil
 }
@@ -96,76 +128,79 @@ func (e *ProcessEngine) CompleteTask(ctx context.Context, activityInstanceID str
 	if ai.ActivityType != spec.ElementTypeUserTask {
 		return fmt.Errorf("engine: activity %q is a %s, not a userTask", activityInstanceID, ai.ActivityType)
 	}
-	ai.Complete()
-	if err := e.store.UpdateActivityInstance(ctx, ai); err != nil {
-		return fmt.Errorf("engine: update activity instance %q: %w", activityInstanceID, err)
-	}
-	recordHistory(ctx, e.store, ai)
 
-	// Merge variables before sign/delegate handling (so they're visible downstream)
-	if len(variables) > 0 {
-		pi, err := e.store.GetProcessInstance(ctx, ai.ProcessInstanceID)
-		if err != nil {
-			return fmt.Errorf("engine: get instance %q: %w", ai.ProcessInstanceID, err)
+	// Execute all mutations within a transaction
+	return e.runWithLock(ctx, ai.ProcessInstanceID, func(txCtx context.Context) error {
+		ai.Complete()
+		if err := e.store.UpdateActivityInstance(txCtx, ai); err != nil {
+			return fmt.Errorf("engine: update activity instance %q: %w", activityInstanceID, err)
 		}
-		if pi.Variables == nil {
-			pi.Variables = make(map[string]any)
-		}
-		for k, v := range variables {
-			pi.Variables[k] = v
-			if err := e.store.SetVariable(ctx, pi.ID, k, v); err != nil {
-				return fmt.Errorf("engine: set variable %q: %w", k, err)
+		recordHistory(txCtx, e.store, ai)
+
+		// Merge variables before sign/delegate handling (so they're visible downstream)
+		if len(variables) > 0 {
+			pi, err := e.store.GetProcessInstance(txCtx, ai.ProcessInstanceID)
+			if err != nil {
+				return fmt.Errorf("engine: get instance %q: %w", ai.ProcessInstanceID, err)
+			}
+			if pi.Variables == nil {
+				pi.Variables = make(map[string]any)
+			}
+			for k, v := range variables {
+				pi.Variables[k] = v
+				if err := e.store.SetVariable(txCtx, pi.ID, k, v); err != nil {
+					return fmt.Errorf("engine: set variable %q: %w", k, err)
+				}
+			}
+			if err := e.store.UpdateProcessInstance(txCtx, pi); err != nil {
+				return fmt.Errorf("engine: update instance %q: %w", ai.ProcessInstanceID, err)
 			}
 		}
-		if err := e.store.UpdateProcessInstance(ctx, pi); err != nil {
-			return fmt.Errorf("engine: update instance %q: %w", ai.ProcessInstanceID, err)
+
+		n := &navigator{store: e.store, identity: e.identity}
+
+		// 加签
+		if ai.AdhocParentID != "" {
+			pi2, err := e.store.GetProcessInstance(txCtx, ai.ProcessInstanceID)
+			if err != nil {
+				return fmt.Errorf("engine: get instance: %w", err)
+			}
+			return n.handleSignCompletion(txCtx, pi2, ai, variables)
 		}
-	}
-
-	n := &navigator{store: e.store, identity: e.identity}
-
-	// 加签
-	if ai.AdhocParentID != "" {
-		pi2, err := e.store.GetProcessInstance(ctx, ai.ProcessInstanceID)
+		pi2, err := e.store.GetProcessInstance(txCtx, ai.ProcessInstanceID)
 		if err != nil {
 			return fmt.Errorf("engine: get instance: %w", err)
 		}
-		return n.handleSignCompletion(ctx, pi2, ai, variables)
-	}
-	pi2, err := e.store.GetProcessInstance(ctx, ai.ProcessInstanceID)
-	if err != nil {
-		return fmt.Errorf("engine: get instance: %w", err)
-	}
-	if hasPendingSigns(ctx, e.store, pi2, ai) {
-		return nil
-	}
-
-	// 委派: delegate completed, return to original assignee
-	// Must consume the token first, since handleDelegateCompletion creates a new one at same element
-	tokens, _ := e.store.ListActiveTokens(ctx, ai.ProcessInstanceID)
-	for _, tok := range tokens {
-		if tok.CurrentElementID == ai.ActivityID && tok.State == instance.TokenStateActive {
-			tok.State = instance.TokenStateConsumed
-			e.store.UpdateToken(ctx, tok)
-			break
+		if hasPendingSigns(txCtx, e.store, pi2, ai) {
+			return nil
 		}
-	}
-	if n.handleDelegateCompletion(ctx, pi2, ai) {
+
+		// 委派: delegate completed, return to original assignee
+		tokens, _ := e.store.ListActiveTokens(txCtx, ai.ProcessInstanceID)
+		for _, tok := range tokens {
+			if tok.CurrentElementID == ai.ActivityID && tok.State == instance.TokenStateActive {
+				tok.State = instance.TokenStateConsumed
+				e.store.UpdateToken(txCtx, tok)
+				break
+			}
+		}
+		if n.handleDelegateCompletion(txCtx, pi2, ai) {
+			return nil
+		}
+
+		// Clean up timer jobs and signal subscriptions for normal flow advancement.
+		if err := e.store.DeleteTimerJobsByInstance(txCtx, ai.ProcessInstanceID); err != nil {
+			return fmt.Errorf("engine: cleanup timer jobs: %w", err)
+		}
+		if err := e.store.DeleteSubscriptionsByInstance(txCtx, ai.ProcessInstanceID); err != nil {
+			return fmt.Errorf("engine: cleanup subscriptions: %w", err)
+		}
+
+		if err := n.navigateFrom(txCtx, ai.ProcessInstanceID, ai.ActivityID); err != nil {
+			return fmt.Errorf("engine: navigate from task %q: %w", ai.ActivityID, err)
+		}
 		return nil
-	}
-
-	// Clean up timer jobs and signal subscriptions for normal flow advancement.
-	if err := e.store.DeleteTimerJobsByInstance(ctx, ai.ProcessInstanceID); err != nil {
-		return fmt.Errorf("engine: cleanup timer jobs: %w", err)
-	}
-	if err := e.store.DeleteSubscriptionsByInstance(ctx, ai.ProcessInstanceID); err != nil {
-		return fmt.Errorf("engine: cleanup subscriptions: %w", err)
-	}
-
-	if err := n.navigateFrom(ctx, ai.ProcessInstanceID, ai.ActivityID); err != nil {
-		return fmt.Errorf("engine: navigate from task %q: %w", ai.ActivityID, err)
-	}
-	return nil
+	})
 }
 
 type SignType string

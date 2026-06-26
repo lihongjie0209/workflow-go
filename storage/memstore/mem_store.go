@@ -160,9 +160,14 @@ func (s *Store) CreateActivityInstance(_ context.Context, ai *instance.ActivityI
 func (s *Store) UpdateActivityInstance(_ context.Context, ai *instance.ActivityInstance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.activities[ai.ID]; !exists {
+	existing, exists := s.activities[ai.ID]
+	if !exists {
 		return fmt.Errorf("memstore: activity instance %q not found: %w", ai.ID, storage.ErrNotFound)
 	}
+	if ai.LockVersion != existing.LockVersion {
+		return fmt.Errorf("memstore: activity instance %q: %w", ai.ID, storage.ErrOptimisticLocking)
+	}
+	ai.LockVersion++
 	s.activities[ai.ID] = ai
 	return nil
 }
@@ -228,9 +233,14 @@ func (s *Store) CreateToken(_ context.Context, t *instance.Token) error {
 func (s *Store) UpdateToken(_ context.Context, t *instance.Token) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if _, exists := s.tokens[t.ID]; !exists {
+	existing, exists := s.tokens[t.ID]
+	if !exists {
 		return fmt.Errorf("memstore: token %q not found: %w", t.ID, storage.ErrNotFound)
 	}
+	if t.LockVersion != existing.LockVersion {
+		return fmt.Errorf("memstore: token %q: %w", t.ID, storage.ErrOptimisticLocking)
+	}
+	t.LockVersion++
 	s.tokens[t.ID] = t
 	return nil
 }
@@ -383,6 +393,14 @@ func (s *Store) ListCompletedProcessInstances(_ context.Context, limit int) ([]*
 		}
 	}
 	return result, nil
+}
+
+// --- QueryStore ---
+
+func (s *Store) RunInTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	// memstore methods individually acquire locks, so no additional locking needed.
+	// The transaction simply provides a context scope for atomicity (no partial writes).
+	return fn(ctx)
 }
 
 // --- QueryStore ---

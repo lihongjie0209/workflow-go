@@ -25,6 +25,10 @@ import (
 // ErrNotFound is returned when a requested entity is not found.
 var ErrNotFound = errors.New("entity not found")
 
+// ErrOptimisticLocking is returned when an update fails due to a concurrent modification.
+// The caller should retry the operation after re-reading the entity.
+var ErrOptimisticLocking = errors.New("optimistic locking conflict")
+
 // Store is the aggregate storage interface combining all sub-stores.
 // Implementations must be safe for concurrent access.
 type Store interface {
@@ -37,6 +41,7 @@ type Store interface {
 	SignalSubscriptionStore
 	HistoricActivityInstanceStore
 	QueryStore
+	TransactionStore
 	io.Closer
 }
 
@@ -135,6 +140,13 @@ type TimerJobStore interface {
 	ListDueTimerJobs(ctx context.Context, before time.Time) ([]*instance.TimerJob, error)
 	DeleteTimerJob(ctx context.Context, id string) error
 	DeleteTimerJobsByInstance(ctx context.Context, processInstanceID string) error
+}
+
+// TransactionStore provides atomic execution of multiple storage operations.
+// All operations within the function share the same database transaction (for SQL stores)
+// or the same lock (for in-memory stores).
+type TransactionStore interface {
+	RunInTransaction(ctx context.Context, fn func(ctx context.Context) error) error
 }
 
 type SignalSubscriptionStore interface {

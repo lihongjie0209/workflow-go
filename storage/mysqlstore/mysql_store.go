@@ -139,12 +139,64 @@ func (s *Store) init() error {
 
 // --- ProcessDefinitionStore ---
 
+// txKey is used to store the transaction in the context.
+type txKey struct{}
+
+// txFromContext returns the transaction from the context, or nil if not in a transaction.
+func txFromContext(ctx context.Context) *sql.Tx {
+	if tx, ok := ctx.Value(txKey{}).(*sql.Tx); ok {
+		return tx
+	}
+	return nil
+}
+
+// execContext runs ExecContext on either the transaction or the database.
+func execContext(ctx context.Context, db *sql.DB, query string, args ...any) (sql.Result, error) {
+	if tx := txFromContext(ctx); tx != nil {
+		return tx.ExecContext(ctx, query, args...)
+	}
+	return db.ExecContext(ctx, query, args...)
+}
+
+// queryRowContext runs QueryRowContext on either the transaction or the database.
+func queryRowContext(ctx context.Context, db *sql.DB, query string, args ...any) *sql.Row {
+	if tx := txFromContext(ctx); tx != nil {
+		return tx.QueryRowContext(ctx, query, args...)
+	}
+	return db.QueryRowContext(ctx, query, args...)
+}
+
+// queryContext runs QueryContext on either the transaction or the database.
+func queryContext(ctx context.Context, db *sql.DB, query string, args ...any) (*sql.Rows, error) {
+	if tx := txFromContext(ctx); tx != nil {
+		return tx.QueryContext(ctx, query, args...)
+	}
+	return db.QueryContext(ctx, query, args...)
+}
+
+// RunInTransaction executes the given function within a database transaction.
+func (s *Store) RunInTransaction(ctx context.Context, fn func(ctx context.Context) error) error {
+	if txFromContext(ctx) != nil {
+		return fn(ctx)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	txCtx := context.WithValue(ctx, txKey{}, tx)
+	if err := fn(txCtx); err != nil {
+		tx.Rollback()
+		return err
+	}
+	return tx.Commit()
+}
+
 func (s *Store) CreateProcessDefinition(ctx context.Context, def *spec.ProcessDefinition) error {
 	data, err := serializeProcessDefinition(def)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx,
+	_, err = execContext(ctx, s.db,
 		`INSERT INTO process_definitions (id, name, key_col, version, data) VALUES (?, ?, ?, ?, ?)`,
 		def.ID, def.Name, def.Key, def.Version, data)
 	if err != nil {
@@ -155,7 +207,7 @@ func (s *Store) CreateProcessDefinition(ctx context.Context, def *spec.ProcessDe
 
 func (s *Store) GetProcessDefinition(ctx context.Context, id string) (*spec.ProcessDefinition, error) {
 	var data []byte
-	err := s.db.QueryRowContext(ctx, `SELECT data FROM process_definitions WHERE id = ?`, id).Scan(&data)
+	err := queryRowContext(ctx, s.db, `SELECT data FROM process_definitions WHERE id = ?`, id).Scan(&data)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("mysqlstore: process definition %q not found: %w", id, storage.ErrNotFound)
 	}
@@ -167,7 +219,7 @@ func (s *Store) GetProcessDefinition(ctx context.Context, id string) (*spec.Proc
 
 func (s *Store) GetProcessDefinitionByKeyVersion(ctx context.Context, key string, version int) (*spec.ProcessDefinition, error) {
 	var data []byte
-	err := s.db.QueryRowContext(ctx,
+	err := queryRowContext(ctx, s.db,
 		`SELECT data FROM process_definitions WHERE key_col = ? AND version = ?`, key, version).Scan(&data)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("mysqlstore: process definition %q version %d not found: %w", key, version, storage.ErrNotFound)
@@ -179,7 +231,7 @@ func (s *Store) GetProcessDefinitionByKeyVersion(ctx context.Context, key string
 }
 
 func (s *Store) ListProcessDefinitions(ctx context.Context) ([]*spec.ProcessDefinition, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT data FROM process_definitions`)
+	rows, err := queryContext(ctx, s.db, `SELECT data FROM process_definitions`)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +253,7 @@ func (s *Store) ListProcessDefinitions(ctx context.Context) ([]*spec.ProcessDefi
 }
 
 func (s *Store) DeleteProcessDefinition(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM process_definitions WHERE id = ?`, id)
+	res, err := execContext(ctx, s.db, `DELETE FROM process_definitions WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
@@ -219,7 +271,7 @@ func (s *Store) CreateProcessInstance(ctx context.Context, pi *instance.ProcessI
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx,
+	_, err = execContext(ctx, s.db,
 		`INSERT INTO process_instances (id, def_id, business_key, tenant_id, state, variables, started_at, parent_process_instance_id, parent_activity_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		pi.ID, pi.ProcessDefinitionID, pi.BusinessKey, pi.TenantID, string(pi.State), string(vars), pi.StartedAt, pi.ParentProcessInstanceID, pi.ParentActivityID)
 	if err != nil {
@@ -233,7 +285,7 @@ func (s *Store) UpdateProcessInstance(ctx context.Context, pi *instance.ProcessI
 	if err != nil {
 		return err
 	}
-	res, err := s.db.ExecContext(ctx,
+	res, err := execContext(ctx, s.db,
 		`UPDATE process_instances SET state = ?, variables = ?, ended_at = ? WHERE id = ?`,
 		string(pi.State), string(vars), pi.EndedAt, pi.ID)
 	if err != nil {
@@ -253,7 +305,7 @@ func (s *Store) GetProcessInstance(ctx context.Context, id string) (*instance.Pr
 		startedAt       time.Time
 		endedAt         *time.Time
 	)
-	err := s.db.QueryRowContext(ctx,
+	err := queryRowContext(ctx, s.db,
 		`SELECT business_key, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances WHERE id = ?`, id).
 		Scan(&businessKey, &defID, &stateStr, &varsJSON, &startedAt, &endedAt, &parentPIID, &parentActID)
 	if err == sql.ErrNoRows {
@@ -284,7 +336,7 @@ func (s *Store) GetProcessInstance(ctx context.Context, id string) (*instance.Pr
 }
 
 func (s *Store) ListProcessInstances(ctx context.Context, defID string) ([]*instance.ProcessInstance, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := queryContext(ctx, s.db,
 		`SELECT id, business_key, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances WHERE def_id = ?`, defID)
 	if err != nil {
 		return nil, err
@@ -297,7 +349,7 @@ func (s *Store) ListProcessInstances(ctx context.Context, defID string) ([]*inst
 // --- ActivityInstanceStore ---
 
 func (s *Store) CreateActivityInstance(ctx context.Context, ai *instance.ActivityInstance) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := execContext(ctx, s.db,
 		`INSERT INTO activity_instances (id, process_instance_id, tenant_id, activity_id, activity_type, assignee, adhoc_parent_id, state, multi_instance_loop, loop_counter, expire_time, term_mode) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		ai.ID, ai.ProcessInstanceID, ai.ActivityID, string(ai.ActivityType), ai.TenantID, ai.Assignee, ai.AdhocParentID, string(ai.State), ai.MultiInstanceLoopID, ai.LoopCounter, ai.ExpireTime, ai.TermMode)
 	if err != nil {
@@ -307,9 +359,9 @@ func (s *Store) CreateActivityInstance(ctx context.Context, ai *instance.Activit
 }
 
 func (s *Store) UpdateActivityInstance(ctx context.Context, ai *instance.ActivityInstance) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE activity_instances SET state = ?, assignee = ?, adhoc_parent_id = ?, claim_time = ?, completed_time = ?, multi_instance_loop = ?, loop_counter = ?, expire_time = ?, term_mode = ? WHERE id = ?`,
-		string(ai.State), ai.Assignee, ai.AdhocParentID, ai.ClaimTime, ai.CompletedTime, ai.MultiInstanceLoopID, ai.LoopCounter, ai.ExpireTime, ai.TermMode, ai.ID)
+	res, err := execContext(ctx, s.db,
+		`UPDATE activity_instances SET state = ?, assignee = ?, adhoc_parent_id = ?, claim_time = ?, completed_time = ?, multi_instance_loop = ?, loop_counter = ?, expire_time = ?, term_mode = ?, lock_version = lock_version + 1 WHERE id = ? AND lock_version = ?`,
+		string(ai.State), ai.Assignee, ai.AdhocParentID, ai.ClaimTime, ai.CompletedTime, ai.MultiInstanceLoopID, ai.LoopCounter, ai.ExpireTime, ai.TermMode, ai.ID, ai.LockVersion)
 	if err != nil {
 		return err
 	}
@@ -330,10 +382,11 @@ func (s *Store) GetActivityInstance(ctx context.Context, id string) (*instance.A
 		adhocParentID                             string
 		expireTime                                  *time.Time
 		termMode                                    int
+lockVersion                                 int
 	)
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode FROM activity_instances WHERE id = ?`, id).
-		Scan(&id, &piID, &activityID, &activityTypeStr, &assigneeVal, &adhocParentID, &stateStr, &claimTime, &completedTime, &loopID, &loopCounter, &expireTime, &termMode)
+	err := queryRowContext(ctx, s.db,
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode, lock_version FROM activity_instances WHERE id = ?`, id).
+		Scan(&id, &piID, &activityID, &activityTypeStr, &assigneeVal, &adhocParentID, &stateStr, &claimTime, &completedTime, &loopID, &loopCounter, &expireTime, &termMode, &lockVersion)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("mysqlstore: activity instance %q not found: %w", id, storage.ErrNotFound)
 	}
@@ -355,12 +408,13 @@ func (s *Store) GetActivityInstance(ctx context.Context, id string) (*instance.A
 		LoopCounter:         loopCounter,
 		ExpireTime:          expireTime,
 		TermMode:            termMode,
+				LockVersion:         lockVersion,
 	}, nil
 }
 
 func (s *Store) ListActiveActivities(ctx context.Context, processInstanceID string) ([]*instance.ActivityInstance, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode FROM activity_instances WHERE process_instance_id = ? AND state = 'active'`,
+	rows, err := queryContext(ctx, s.db,
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode, lock_version FROM activity_instances WHERE process_instance_id = ? AND state = 'active'`,
 		processInstanceID)
 	if err != nil {
 		return nil, err
@@ -370,8 +424,8 @@ func (s *Store) ListActiveActivities(ctx context.Context, processInstanceID stri
 }
 
 func (s *Store) ListActivitiesByProcessInstance(ctx context.Context, processInstanceID string) ([]*instance.ActivityInstance, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode FROM activity_instances WHERE process_instance_id = ?`,
+	rows, err := queryContext(ctx, s.db,
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode, lock_version FROM activity_instances WHERE process_instance_id = ?`,
 		processInstanceID)
 	if err != nil {
 		return nil, err
@@ -381,8 +435,8 @@ func (s *Store) ListActivitiesByProcessInstance(ctx context.Context, processInst
 }
 
 func (s *Store) ListActivitiesByLoopID(ctx context.Context, processInstanceID, loopID string) ([]*instance.ActivityInstance, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode FROM activity_instances WHERE process_instance_id = ? AND multi_instance_loop = ?`,
+	rows, err := queryContext(ctx, s.db,
+		`SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode, lock_version FROM activity_instances WHERE process_instance_id = ? AND multi_instance_loop = ?`,
 		processInstanceID, loopID)
 	if err != nil {
 		return nil, err
@@ -394,7 +448,7 @@ func (s *Store) ListActivitiesByLoopID(ctx context.Context, processInstanceID, l
 // --- TokenStore ---
 
 func (s *Store) CreateToken(ctx context.Context, t *instance.Token) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := execContext(ctx, s.db,
 		`INSERT INTO tokens (id, process_instance_id, current_element_id, state) VALUES (?, ?, ?, ?)`,
 		t.ID, t.ProcessInstanceID, t.CurrentElementID, string(t.State))
 	if err != nil {
@@ -404,9 +458,9 @@ func (s *Store) CreateToken(ctx context.Context, t *instance.Token) error {
 }
 
 func (s *Store) UpdateToken(ctx context.Context, t *instance.Token) error {
-	res, err := s.db.ExecContext(ctx,
-		`UPDATE tokens SET current_element_id = ?, state = ? WHERE id = ?`,
-		t.CurrentElementID, string(t.State), t.ID)
+	res, err := execContext(ctx, s.db,
+		`UPDATE tokens SET current_element_id = ?, state = ?, lock_version = lock_version + 1 WHERE id = ? AND lock_version = ?`,
+		t.CurrentElementID, string(t.State), t.ID, t.LockVersion)
 	if err != nil {
 		return err
 	}
@@ -420,11 +474,12 @@ func (s *Store) UpdateToken(ctx context.Context, t *instance.Token) error {
 func (s *Store) GetToken(ctx context.Context, id string) (*instance.Token, error) {
 	var (
 		piID, elemID, stateStr string
+		lockVersion           int
 		createdAt              time.Time
 	)
-	err := s.db.QueryRowContext(ctx,
-		`SELECT id, process_instance_id, current_element_id, state, created_at FROM tokens WHERE id = ?`, id).
-		Scan(&id, &piID, &elemID, &stateStr, &createdAt)
+	err := queryRowContext(ctx, s.db,
+		`SELECT id, process_instance_id, current_element_id, state, lock_version, created_at FROM tokens WHERE id = ?`, id).
+		Scan(&id, &piID, &elemID, &stateStr, &lockVersion, &createdAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("mysqlstore: token %q not found: %w", id, storage.ErrNotFound)
 	}
@@ -437,13 +492,14 @@ func (s *Store) GetToken(ctx context.Context, id string) (*instance.Token, error
 		ProcessInstanceID: piID,
 		CurrentElementID:  elemID,
 		State:             instance.TokenState(stateStr),
+				LockVersion:       lockVersion,
 		CreatedAt:         createdAt,
 	}, nil
 }
 
 func (s *Store) ListActiveTokens(ctx context.Context, processInstanceID string) ([]*instance.Token, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, process_instance_id, current_element_id, state, created_at FROM tokens WHERE process_instance_id = ? AND state = 'active'`,
+	rows, err := queryContext(ctx, s.db,
+		`SELECT id, process_instance_id, current_element_id, state, lock_version, created_at FROM tokens WHERE process_instance_id = ? AND state = 'active'`,
 		processInstanceID)
 	if err != nil {
 		return nil, err
@@ -453,7 +509,7 @@ func (s *Store) ListActiveTokens(ctx context.Context, processInstanceID string) 
 }
 
 func (s *Store) DeleteToken(ctx context.Context, id string) error {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM tokens WHERE id = ?`, id)
+	res, err := execContext(ctx, s.db, `DELETE FROM tokens WHERE id = ?`, id)
 	if err != nil {
 		return err
 	}
@@ -471,7 +527,7 @@ func (s *Store) SetVariable(ctx context.Context, processInstanceID, name string,
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx,
+	_, err = execContext(ctx, s.db,
 		`INSERT INTO variables (process_instance_id, name, value) VALUES (?, ?, ?)
 		 ON DUPLICATE KEY UPDATE value = VALUES(value)`,
 		processInstanceID, name, string(valBytes))
@@ -480,7 +536,7 @@ func (s *Store) SetVariable(ctx context.Context, processInstanceID, name string,
 
 func (s *Store) GetVariable(ctx context.Context, processInstanceID, name string) (any, error) {
 	var valJSON string
-	err := s.db.QueryRowContext(ctx,
+	err := queryRowContext(ctx, s.db,
 		`SELECT value FROM variables WHERE process_instance_id = ? AND name = ?`,
 		processInstanceID, name).Scan(&valJSON)
 	if err == sql.ErrNoRows {
@@ -498,7 +554,7 @@ func (s *Store) GetVariable(ctx context.Context, processInstanceID, name string)
 }
 
 func (s *Store) GetAllVariables(ctx context.Context, processInstanceID string) (map[string]any, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := queryContext(ctx, s.db,
 		`SELECT name, value FROM variables WHERE process_instance_id = ?`, processInstanceID)
 	if err != nil {
 		return nil, err
@@ -521,7 +577,7 @@ func (s *Store) GetAllVariables(ctx context.Context, processInstanceID string) (
 }
 
 func (s *Store) DeleteVariable(ctx context.Context, processInstanceID, name string) error {
-	res, err := s.db.ExecContext(ctx,
+	res, err := execContext(ctx, s.db,
 		`DELETE FROM variables WHERE process_instance_id = ? AND name = ?`, processInstanceID, name)
 	if err != nil {
 		return err
@@ -540,14 +596,14 @@ func (s *Store) CreateHistoricActivityInstance(ctx context.Context, hai *instanc
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx,
+	_, err = execContext(ctx, s.db,
 		`INSERT INTO historic_activity_instances (id, process_instance_id, activity_id, activity_type, variables, started_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		hai.ID, hai.ProcessInstanceID, hai.ActivityID, string(hai.ActivityType), string(vars), hai.StartedAt, hai.CompletedAt)
 	return err
 }
 
 func (s *Store) ListHistoricByProcessInstance(ctx context.Context, processInstanceID string) ([]*instance.HistoricActivityInstance, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := queryContext(ctx, s.db,
 		`SELECT id, process_instance_id, activity_id, activity_type, variables, started_at, completed_at FROM historic_activity_instances WHERE process_instance_id = ?`,
 		processInstanceID)
 	if err != nil {
@@ -578,7 +634,7 @@ func (s *Store) ListHistoricByProcessInstance(ctx context.Context, processInstan
 
 func (s *Store) GetLatestProcessDefinitionByKey(ctx context.Context, key string) (*spec.ProcessDefinition, error) {
 	var data []byte
-	err := s.db.QueryRowContext(ctx, `SELECT data FROM process_definitions WHERE key_col = ? ORDER BY version DESC LIMIT 1`, key).Scan(&data)
+	err := queryRowContext(ctx, s.db, `SELECT data FROM process_definitions WHERE key_col = ? ORDER BY version DESC LIMIT 1`, key).Scan(&data)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("mysqlstore: process definition with key %q not found: %w", key, storage.ErrNotFound)
 	}
@@ -591,7 +647,7 @@ func (s *Store) GetLatestProcessDefinitionByKey(ctx context.Context, key string)
 // --- Additional ProcessInstanceStore ---
 
 func (s *Store) ListCompletedProcessInstances(ctx context.Context, limit int) ([]*instance.ProcessInstance, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := queryContext(ctx, s.db,
 		`SELECT id, business_key, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances WHERE state = 'completed' ORDER BY ended_at DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -603,21 +659,21 @@ func (s *Store) ListCompletedProcessInstances(ctx context.Context, limit int) ([
 // --- TimerJobStore ---
 
 func (s *Store) CreateTimerJob(ctx context.Context, job *instance.TimerJob) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := execContext(ctx, s.db,
 		`INSERT INTO timer_jobs (id, process_instance_id, element_id, due_at, fired) VALUES (?, ?, ?, ?, ?)`,
 		job.ID, job.ProcessInstanceID, job.ElementID, job.DueAt, job.Fired)
 	return err
 }
 
 func (s *Store) UpdateTimerJob(ctx context.Context, job *instance.TimerJob) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := execContext(ctx, s.db,
 		`UPDATE timer_jobs SET due_at = ?, fired = ? WHERE id = ?`,
 		job.DueAt, job.Fired, job.ID)
 	return err
 }
 
 func (s *Store) ListDueTimerJobs(ctx context.Context, before time.Time) ([]*instance.TimerJob, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := queryContext(ctx, s.db,
 		`SELECT id, process_instance_id, element_id, due_at, fired FROM timer_jobs WHERE fired = 0 AND due_at < ?`, before)
 	if err != nil {
 		return nil, err
@@ -635,26 +691,26 @@ func (s *Store) ListDueTimerJobs(ctx context.Context, before time.Time) ([]*inst
 }
 
 func (s *Store) DeleteTimerJob(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM timer_jobs WHERE id = ?`, id)
+	_, err := execContext(ctx, s.db, `DELETE FROM timer_jobs WHERE id = ?`, id)
 	return err
 }
 
 func (s *Store) DeleteTimerJobsByInstance(ctx context.Context, processInstanceID string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM timer_jobs WHERE process_instance_id = ?`, processInstanceID)
+	_, err := execContext(ctx, s.db, `DELETE FROM timer_jobs WHERE process_instance_id = ?`, processInstanceID)
 	return err
 }
 
 // --- SignalSubscriptionStore ---
 
 func (s *Store) CreateSignalSubscription(ctx context.Context, sub *instance.SignalSubscription) error {
-	_, err := s.db.ExecContext(ctx,
+	_, err := execContext(ctx, s.db,
 		`INSERT INTO signal_subscriptions (id, process_instance_id, element_id, signal_ref) VALUES (?, ?, ?, ?)`,
 		sub.ID, sub.ProcessInstanceID, sub.ElementID, sub.SignalRef)
 	return err
 }
 
 func (s *Store) ListSignalSubscriptions(ctx context.Context, signalRef string) ([]*instance.SignalSubscription, error) {
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := queryContext(ctx, s.db,
 		`SELECT id, process_instance_id, element_id, signal_ref FROM signal_subscriptions WHERE signal_ref = ?`, signalRef)
 	if err != nil {
 		return nil, err
@@ -672,12 +728,12 @@ func (s *Store) ListSignalSubscriptions(ctx context.Context, signalRef string) (
 }
 
 func (s *Store) DeleteSignalSubscription(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM signal_subscriptions WHERE id = ?`, id)
+	_, err := execContext(ctx, s.db, `DELETE FROM signal_subscriptions WHERE id = ?`, id)
 	return err
 }
 
 func (s *Store) DeleteSubscriptionsByInstance(ctx context.Context, processInstanceID string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM signal_subscriptions WHERE process_instance_id = ?`, processInstanceID)
+	_, err := execContext(ctx, s.db, `DELETE FROM signal_subscriptions WHERE process_instance_id = ?`, processInstanceID)
 	return err
 }
 
@@ -704,7 +760,7 @@ func (s *Store) QueryDefinitions(ctx context.Context, q storage.DefQuery) ([]*sp
 	}
 
 	var total int
-	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM process_definitions "+where, args...).Scan(&total)
+	err := queryRowContext(ctx, s.db, "SELECT COUNT(*) FROM process_definitions "+where, args...).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -715,7 +771,7 @@ func (s *Store) QueryDefinitions(ctx context.Context, q storage.DefQuery) ([]*sp
 	dataArgs := make([]any, len(args))
 	copy(dataArgs, args)
 	dataArgs = append(dataArgs, q.Limit, q.Offset)
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := queryContext(ctx, s.db,
 		"SELECT data FROM process_definitions "+where+" ORDER BY version DESC LIMIT ? OFFSET ?",
 		dataArgs...)
 	if err != nil {
@@ -771,7 +827,7 @@ func (s *Store) QueryProcessInstances(ctx context.Context, q storage.InstQuery) 
 	}
 
 	var total int
-	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM process_instances "+where, args...).Scan(&total)
+	err := queryRowContext(ctx, s.db, "SELECT COUNT(*) FROM process_instances "+where, args...).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -782,7 +838,7 @@ func (s *Store) QueryProcessInstances(ctx context.Context, q storage.InstQuery) 
 	dataArgs := make([]any, len(args))
 	copy(dataArgs, args)
 	dataArgs = append(dataArgs, q.Limit, q.Offset)
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := queryContext(ctx, s.db,
 		"SELECT id, business_key, def_id, state, variables, started_at, ended_at, parent_process_instance_id, parent_activity_id FROM process_instances "+where+" ORDER BY started_at DESC LIMIT ? OFFSET ?",
 		dataArgs...)
 	if err != nil {
@@ -833,7 +889,7 @@ func (s *Store) QueryActivities(ctx context.Context, q storage.ActQuery) ([]*ins
 	}
 
 	var total int
-	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM activity_instances "+where, args...).Scan(&total)
+	err := queryRowContext(ctx, s.db, "SELECT COUNT(*) FROM activity_instances "+where, args...).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -844,8 +900,8 @@ func (s *Store) QueryActivities(ctx context.Context, q storage.ActQuery) ([]*ins
 	dataArgs := make([]any, len(args))
 	copy(dataArgs, args)
 	dataArgs = append(dataArgs, q.Limit, q.Offset)
-	rows, err := s.db.QueryContext(ctx,
-		"SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode FROM activity_instances "+where+" ORDER BY claim_time ASC LIMIT ? OFFSET ?",
+	rows, err := queryContext(ctx, s.db,
+		"SELECT id, process_instance_id, activity_id, activity_type, assignee, adhoc_parent_id, state, claim_time, completed_time, multi_instance_loop, loop_counter, expire_time, term_mode, lock_version FROM activity_instances "+where+" ORDER BY claim_time ASC LIMIT ? OFFSET ?",
 		dataArgs...)
 	if err != nil {
 		return nil, 0, err
@@ -888,7 +944,7 @@ func (s *Store) QueryHistoricActivities(ctx context.Context, q storage.HistQuery
 	}
 
 	var total int
-	err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM historic_activity_instances "+where, args...).Scan(&total)
+	err := queryRowContext(ctx, s.db, "SELECT COUNT(*) FROM historic_activity_instances "+where, args...).Scan(&total)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -899,7 +955,7 @@ func (s *Store) QueryHistoricActivities(ctx context.Context, q storage.HistQuery
 	dataArgs := make([]any, len(args))
 	copy(dataArgs, args)
 	dataArgs = append(dataArgs, q.Limit, q.Offset)
-	rows, err := s.db.QueryContext(ctx,
+	rows, err := queryContext(ctx, s.db,
 		"SELECT id, process_instance_id, activity_id, activity_type, variables, started_at, completed_at FROM historic_activity_instances "+where+" ORDER BY completed_at DESC LIMIT ? OFFSET ?",
 		dataArgs...)
 	if err != nil {
@@ -983,8 +1039,9 @@ func scanActivityInstances(rows *sql.Rows) ([]*instance.ActivityInstance, error)
 			loopCounter                                             int
 			expireTime                                      *time.Time
 			termMode                                        int
+lockVersion                                 int
 		)
-		if err := rows.Scan(&id, &piID, &activityID, &activityTypeStr, &assigneeVal, &adhocParentID, &stateStr, &claimTime, &completedTime, &loopID, &loopCounter, &expireTime, &termMode); err != nil {
+		if err := rows.Scan(&id, &piID, &activityID, &activityTypeStr, &assigneeVal, &adhocParentID, &stateStr, &claimTime, &completedTime, &loopID, &loopCounter, &expireTime, &termMode, &lockVersion); err != nil {
 			return nil, err
 		}
 		result = append(result, &instance.ActivityInstance{
@@ -1001,6 +1058,7 @@ func scanActivityInstances(rows *sql.Rows) ([]*instance.ActivityInstance, error)
 			LoopCounter:         loopCounter,
 			ExpireTime:          expireTime,
 			TermMode:            termMode,
+				LockVersion:         lockVersion,
 		})
 	}
 	return result, rows.Err()
@@ -1011,9 +1069,10 @@ func scanTokens(rows *sql.Rows) ([]*instance.Token, error) {
 	for rows.Next() {
 		var (
 			id, piID, elemID, stateStr string
-			createdAt                  time.Time
+			lockVersion           int
+		createdAt                  time.Time
 		)
-		if err := rows.Scan(&id, &piID, &elemID, &stateStr, &createdAt); err != nil {
+		if err := rows.Scan(&id, &piID, &elemID, &stateStr, &lockVersion, &createdAt); err != nil {
 			return nil, err
 		}
 		result = append(result, &instance.Token{
@@ -1021,6 +1080,7 @@ func scanTokens(rows *sql.Rows) ([]*instance.Token, error) {
 			ProcessInstanceID: piID,
 			CurrentElementID:  elemID,
 			State:             instance.TokenState(stateStr),
+				LockVersion:       lockVersion,
 			CreatedAt:         createdAt,
 		})
 	}

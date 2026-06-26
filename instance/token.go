@@ -20,6 +20,7 @@ type Token struct {
 	TenantID          string
 	CurrentElementID  string // the element this token currently occupies
 	State             TokenState
+	LockVersion       int // optimistic lock version, incremented on each update
 	CreatedAt         time.Time
 }
 
